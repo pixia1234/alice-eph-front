@@ -244,6 +244,7 @@ function App() {
 
   const [catalog, setCatalog] = useLocalStorage<CatalogData>('alice.catalog', defaultCatalog)
   const [prefetchState, setPrefetchState] = useState<'idle'|'loading'|'done'|'error'>('idle')
+  const [catalogRefreshTick, bumpCatalogRefreshTick] = useState(0)
   const initialEndpoint = defaultEndpoint ?? endpoints[0]
   const [selectedEndpointId, setSelectedEndpointId] = useState(initialEndpoint?.id ?? '')
   const selectedEndpoint = useMemo(
@@ -292,7 +293,6 @@ function App() {
   /** 一次性预取参考数据（plans / instances / sshKeys / userInfo），更简单的状态机 */
   useEffect(() => {
     if (!hasCredentials) return
-    if (prefetchState === 'loading' || prefetchState === 'done') return
 
     let cancelled = false
     setPrefetchState('loading')
@@ -315,8 +315,13 @@ function App() {
         )
         if (cancelled) return
 
-        let next: CatalogData = { ...catalog, osByPlan: { ...catalog.osByPlan } }
         let ok = 0
+        let planOptionsUpdate: OptionItem[] | null = null
+        const planOsUpdates: Record<string, OptionItem[]> = {}
+        let instancesUpdate: OptionItem[] | null = null
+        let sshKeysUpdate: OptionItem[] | null = null
+        let userInfoUpdate: unknown = undefined
+        let hasUserInfoUpdate = false
 
         results.forEach(r => {
           if (r.status !== 'fulfilled') return
@@ -326,27 +331,56 @@ function App() {
           ok++
 
           if (t.key === 'userInfo') {
-            next.userInfo = res.data ?? res.rawBody
+            userInfoUpdate = res.data ?? res.rawBody
+            hasUserInfoUpdate = true
             return
           }
+
           const parsed = t.parser ? t.parser(res.data) : []
           if (t.key === 'plans' && parsed.length > 0) {
-            next.plans = parsed
-          for (const p of parsed) {
-            const planIdKey = String(p.value)
-            const flattened = flattenPlanOs(p.raw ?? {})
-            const existing = next.osByPlan[planIdKey]
-            if (!existing || existing.length === 0) {
-              next.osByPlan[planIdKey] = flattened
+            planOptionsUpdate = parsed
+            for (const p of parsed) {
+              const planIdKey = String(p.value)
+              const flattened = flattenPlanOs(p.raw ?? {})
+              if (flattened.length > 0 && !planOsUpdates[planIdKey]) {
+                planOsUpdates[planIdKey] = flattened
+              }
             }
           }
+          if (t.key === 'instances' && parsed.length > 0) {
+            instancesUpdate = parsed
           }
-          if (t.key === 'instances' && parsed.length > 0) next.instances = parsed
-          if (t.key === 'sshKeys' && parsed.length > 0) next.sshKeys = parsed
+          if (t.key === 'sshKeys' && parsed.length > 0) {
+            sshKeysUpdate = parsed
+          }
         })
 
-        next.lastUpdated = Date.now()
-        setCatalog(next)
+        if (cancelled) return
+
+        setCatalog(prev => {
+          const next: CatalogData = { ...prev, osByPlan: { ...prev.osByPlan } }
+          if (planOptionsUpdate && planOptionsUpdate.length > 0) {
+            next.plans = planOptionsUpdate
+            for (const [planId, osOptions] of Object.entries(planOsUpdates)) {
+              const existing = next.osByPlan[planId]
+              if (!existing || existing.length === 0) {
+                next.osByPlan[planId] = osOptions
+              }
+            }
+          }
+          if (instancesUpdate && instancesUpdate.length > 0) {
+            next.instances = instancesUpdate
+          }
+          if (sshKeysUpdate && sshKeysUpdate.length > 0) {
+            next.sshKeys = sshKeysUpdate
+          }
+          if (hasUserInfoUpdate) {
+            next.userInfo = userInfoUpdate
+          }
+          next.lastUpdated = Date.now()
+          return next
+        })
+
         setPrefetchState(ok > 0 ? 'done' : 'error')
       } catch {
         if (!cancelled) setPrefetchState('error')
@@ -354,8 +388,7 @@ function App() {
     })()
 
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasCredentials])
+  }, [catalogRefreshTick, hasCredentials, sanitizedCredentials, setCatalog])
 
   const selectedInstanceOption = useMemo(() => {
     if (!formValues.id) return undefined
@@ -536,7 +569,15 @@ function App() {
           </div>
           <p className="panel__hint">凭证仅存于此浏览器的 localStorage。请注意安全风险。</p>
           <div style={{ display:'flex', gap:8 }}>
-            <button className="ghost-button" onClick={() => { setCatalog(defaultCatalog); setPrefetchState('idle') }} disabled={!hasCredentials}>
+            <button
+              className="ghost-button"
+              onClick={() => {
+                setCatalog(defaultCatalog)
+                setPrefetchState('idle')
+                bumpCatalogRefreshTick(t => t + 1)
+              }}
+              disabled={!hasCredentials}
+            >
               Refresh data
             </button>
             <button className="ghost-button" onClick={() => { setCredentials(defaultCredentials); setCatalog(defaultCatalog); setPrefetchState('idle') }}>
