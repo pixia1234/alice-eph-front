@@ -209,6 +209,11 @@
   border-color: rgba(79, 70, 229, 0.45);
 }
 
+.endpoint-card:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.9);
+  outline-offset: 2px;
+}
+
 .endpoint-card--active {
   border-color: rgba(34, 197, 94, 0.6);
   background: rgba(240, 249, 255, 0.85);
@@ -473,6 +478,58 @@
   margin: 0;
   font-size: 0.85rem;
   color: #64748b;
+}
+
+.option-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.option-card {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  background: rgba(248, 250, 252, 0.9);
+  padding: 0.8rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: flex-start;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border 0.2s ease, background 0.2s ease;
+}
+
+.option-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 24px -20px rgba(79, 70, 229, 0.65);
+  border-color: rgba(79, 70, 229, 0.45);
+}
+
+.option-card:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.85);
+  outline-offset: 2px;
+}
+
+.option-card--active {
+  border-color: rgba(59, 130, 246, 0.6);
+  background: rgba(219, 234, 254, 0.75);
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.35);
+}
+
+.option-card__label {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.option-card__value {
+  font-size: 0.8rem;
+  color: #475569;
+  word-break: break-all;
 }
 
 .required {

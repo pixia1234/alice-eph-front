@@ -365,10 +365,33 @@ function App() {
         <div className="panel__header"><h2>Endpoint</h2></div>
         <div className="panel__content">
           <div className="field-group">
-            <label htmlFor="endpoint">Select endpoint</label>
-            <select id="endpoint" value={selectedEndpointId} onChange={(e) => handleEndpointChange(e.target.value)}>
-              {endpoints.map(ep => <option key={ep.id} value={ep.id}>{ep.name}</option>)}
-            </select>
+            <label>Select endpoint</label>
+            <div className="endpoint-snapshots" role="listbox" aria-label="Available endpoints">
+              {endpoints.map(ep => {
+                const isActive = ep.id === selectedEndpointId
+                return (
+                  <div
+                    key={ep.id}
+                    role="option"
+                    tabIndex={0}
+                    aria-selected={isActive}
+                    className={`endpoint-card ${isActive ? 'endpoint-card--active' : ''}`}
+                    onClick={() => handleEndpointChange(ep.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        handleEndpointChange(ep.id)
+                      }
+                    }}
+                  >
+                    <span className="endpoint-card__method">{ep.method}</span>
+                    <span className="endpoint-card__title">{ep.name}</span>
+                    {ep.description && <span className="endpoint-card__description">{ep.description}</span>}
+                    <span className="endpoint-card__path">{ep.path}</span>
+                  </div>
+                )
+              })}
+            </div>
           </div>
           {selectedEndpoint.description && <p className="panel__hint">{selectedEndpoint.description}</p>}
           <p className="panel__meta">
@@ -382,20 +405,56 @@ function App() {
                 {selectedEndpoint.bodyFields.map(field => {
                   const opts = dynamicOptions[field.key] ?? field.options
                   const hasOpts = Array.isArray(opts) && opts.length > 0
+                  const optionList = hasOpts
+                    ? (opts as (OptionItem | { value: string; label: string })[])
+                        .map((option) => ({
+                          value: option.value,
+                          label: option.label ?? option.value,
+                        }))
+                    : []
+                  const currentValue = hasOpts
+                    ? (formValues[field.key] ?? optionList[0]?.value ?? '')
+                    : (formValues[field.key] ?? '')
+                  const labelId = `label-${field.key}`
                   return (
                     <div className="field-group" key={field.key}>
-                      <label htmlFor={`f-${field.key}`}>{field.label}{field.required && <span className="required">*</span>}</label>
+                      <label
+                        id={labelId}
+                        htmlFor={!hasOpts ? `f-${field.key}` : undefined}
+                      >
+                        {field.label}{field.required && <span className="required">*</span>}
+                      </label>
                       {hasOpts ? (
-                        <select id={`f-${field.key}`} value={formValues[field.key] ?? opts[0]?.value ?? ''}
-                          onChange={(e) => handleFormChange(field.key, e.target.value)}
-                          required={field.required}
+                        <div
+                          id={`f-${field.key}`}
+                          className="option-grid"
+                          role="radiogroup"
+                          aria-required={field.required}
+                          aria-label={field.label}
+                          aria-labelledby={labelId}
                         >
-                          {(opts as OptionItem[] | {value:string;label:string}[]).map((o: any) =>
-                            <option key={o.value} value={o.value} title={o.label}>{o.label}</option>
-                          )}
-                        </select>
+                          {optionList.map((option) => {
+                            const isSelected = currentValue === option.value
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                role="radio"
+                                aria-checked={isSelected}
+                                className={`option-card ${isSelected ? 'option-card--active' : ''}`}
+                                onClick={() => handleFormChange(field.key, option.value)}
+                                title={option.label !== option.value ? `${option.label} (${option.value})` : option.label}
+                              >
+                                <span className="option-card__label">{option.label}</span>
+                                {option.value !== option.label && (
+                                  <span className="option-card__value">{option.value}</span>
+                                )}
+                              </button>
+                            )
+                          })}
+                        </div>
                       ) : (
-                        <input id={`f-${field.key}`} value={formValues[field.key] ?? ''}
+                        <input id={`f-${field.key}`} value={currentValue}
                           onChange={(e) => handleFormChange(field.key, e.target.value)}
                           placeholder={field.placeholder} required={field.required}
                         />
