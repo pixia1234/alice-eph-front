@@ -199,26 +199,41 @@ function App() {
             <code>{requestUrl}</code>
           </p>
           <form className="form" onSubmit={handleSubmit}>
-            {selectedEndpoint.bodyFields && selectedEndpoint.bodyFields.length > 0 && (
-              <fieldset className="form__fields">
-                {selectedEndpoint.bodyFields.map((field) => (
-                  <div className="field-group" key={field.key}>
-                    <label htmlFor={`field-${field.key}`}>
-                      {field.label}
-                      {field.required && <span className="required">*</span>}
-                    </label>
-                    <input
-                      id={`field-${field.key}`}
-                      value={formValues[field.key] ?? ''}
-                      onChange={(event) => handleFormValueChange(field.key, event.target.value)}
-                      placeholder={field.placeholder}
-                      required={field.required}
-                    />
-                    {field.helperText && <p className="field-group__hint">{field.helperText}</p>}
-                  </div>
-                ))}
-              </fieldset>
-            )}
+              {selectedEndpoint.bodyFields && selectedEndpoint.bodyFields.length > 0 && (
+                <fieldset className="form__fields">
+                  {selectedEndpoint.bodyFields.map((field) => (
+                    <div className="field-group" key={field.key}>
+                      <label htmlFor={`field-${field.key}`}>
+                        {field.label}
+                        {field.required && <span className="required">*</span>}
+                      </label>
+                      {field.options ? (
+                        <select
+                          id={`field-${field.key}`}
+                          value={formValues[field.key] ?? field.options[0]?.value ?? ''}
+                          onChange={(event) => handleFormValueChange(field.key, event.target.value)}
+                          required={field.required}
+                        >
+                          {field.options.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          id={`field-${field.key}`}
+                          value={formValues[field.key] ?? ''}
+                          onChange={(event) => handleFormValueChange(field.key, event.target.value)}
+                          placeholder={field.placeholder}
+                          required={field.required}
+                        />
+                      )}
+                      {field.helperText && <p className="field-group__hint">{field.helperText}</p>}
+                    </div>
+                  ))}
+                </fieldset>
+              )}
             <button type="submit" className="primary-button" disabled={isLoading}>
               {isLoading ? 'Sending…' : 'Send request'}
             </button>

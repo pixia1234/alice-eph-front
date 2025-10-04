@@ -10,6 +10,7 @@ export type ApiField = {
   required?: boolean
   defaultValue?: string
   placeholder?: string
+  options?: { label: string; value: string }[]
 }
 
 export type ApiEndpoint = {
@@ -95,6 +96,11 @@ export const endpoints: ApiEndpoint[] = [
         helperText: 'Accepts boot, reboot, or shutdown.',
         defaultValue: 'boot',
         required: true,
+        options: [
+          { label: 'Boot', value: 'boot' },
+          { label: 'Reboot', value: 'reboot' },
+          { label: 'Shutdown', value: 'shutdown' },
+        ],
       },
     ],
   },
