@@ -8,6 +8,11 @@ const proxyConfig = {
     secure: true,
     rewrite: (path: string) => path.replace(/^\/api/, '/cli/v1'),
   },
+  '/assets': {
+    target: 'https://app.alice.ws',
+    changeOrigin: true,
+    secure: true,
+  },
 }
 
 export default defineConfig(({ mode }) => {

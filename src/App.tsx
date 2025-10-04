@@ -99,17 +99,53 @@ const readString = (value: unknown): string | undefined => {
   return undefined
 }
 
-/** 允许相对路径（如 /assets/...）作为图片地址 */
-const isImgLike = (s: string) =>
-  /^(data:image|https?:)/i.test(s) || s.startsWith('/')
+let assetOriginCache: string | undefined
+const getAssetOrigin = (): string | undefined => {
+  if (typeof window === 'undefined') return undefined
+  if (assetOriginCache) return assetOriginCache
+  try {
+    const baseUrl = new URL(API_BASE_URL, window.location.origin)
+    assetOriginCache = baseUrl.origin
+  } catch {
+    assetOriginCache = window.location.origin
+  }
+  return assetOriginCache
+}
+
+const normalizeOsGraphicValue = (value: string): OsGraphic | null => {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (trimmed.startsWith('<svg')) return { type: 'svg', content: trimmed }
+  if (/^data:image/i.test(trimmed)) return { type: 'img', content: trimmed }
+  if (/^https?:/i.test(trimmed)) return { type: 'img', content: trimmed }
+
+  if (trimmed.startsWith('//')) {
+    const protocol = typeof window !== 'undefined' ? window.location.protocol : 'https:'
+    return { type: 'img', content: `${protocol}${trimmed}` }
+  }
+
+  const withoutMarker = trimmed.startsWith('*/') ? trimmed.slice(2) : trimmed
+  const origin = getAssetOrigin()
+  if (origin) {
+    try {
+      const absolute = new URL(withoutMarker, `${origin}/`).toString()
+      return { type: 'img', content: absolute }
+    } catch {
+      const normalizedPath = withoutMarker.startsWith('/') ? withoutMarker : `/${withoutMarker}`
+      return { type: 'img', content: `${origin}${normalizedPath}` }
+    }
+  }
+
+  return { type: 'img', content: withoutMarker }
+}
 
 const resolveOsGraphic = (raw?: Record<string, unknown>): OsGraphic | null => {
   if (!raw) return null
   for (const key of OS_ICON_KEYS) {
     const candidate = readString(raw[key])
     if (!candidate) continue
-    if (candidate.startsWith('<svg')) return { type: 'svg', content: candidate }
-    if (isImgLike(candidate)) return { type: 'img', content: candidate }
+    const normalized = normalizeOsGraphicValue(candidate)
+    if (normalized) return normalized
   }
   for (const key of OS_ICON_KEYS) {
     const nested = raw[key]
@@ -117,8 +153,8 @@ const resolveOsGraphic = (raw?: Record<string, unknown>): OsGraphic | null => {
     for (const sourceKey of OS_ICON_SOURCE_KEYS) {
       const candidate = readString(nested[sourceKey])
       if (!candidate) continue
-      if (candidate.startsWith('<svg')) return { type: 'svg', content: candidate }
-      if (isImgLike(candidate)) return { type: 'img', content: candidate }
+      const normalized = normalizeOsGraphicValue(candidate)
+      if (normalized) return normalized
     }
   }
   return null
