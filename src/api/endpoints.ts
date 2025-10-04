@@ -94,11 +94,11 @@ export const endpoints: ApiEndpoint[] = [
         key: 'action',
         label: 'Action',
         helperText: 'Accepts boot, reboot, or shutdown.',
-        defaultValue: 'boot',
+        defaultValue: 'reboot',
         required: true,
         options: [
-          { label: 'Boot', value: 'boot' },
           { label: 'Reboot', value: 'reboot' },
+          { label: 'Boot', value: 'boot' },
           { label: 'Shutdown', value: 'shutdown' },
         ],
       },

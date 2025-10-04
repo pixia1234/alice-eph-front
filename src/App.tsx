@@ -20,6 +20,7 @@ type HistoryEntry = {
 }
 
 type OptionItem = { value: string; label: string; raw?: Record<string, unknown> }
+type DisplayOption = { value: string; label: string; raw?: Record<string, unknown> }
 
 type CatalogData = {
   plans: OptionItem[]
@@ -32,6 +33,17 @@ type CatalogData = {
 
 const defaultCatalog: CatalogData = { plans: [], instances: [], sshKeys: [], osByPlan: {} }
 const defaultCredentials: Credentials = { clientId: '', clientSecret: '' }
+
+const PRIMARY_ENDPOINT_IDS = ['evo-deploy', 'evo-power', 'evo-rebuild'] as const
+const PRIMARY_ENDPOINT_ID_SET = new Set<string>(PRIMARY_ENDPOINT_IDS)
+
+const defaultEndpoint = (() => {
+  for (const id of PRIMARY_ENDPOINT_IDS) {
+    const found = endpoints.find(ep => ep.id === id)
+    if (found) return found
+  }
+  return endpoints[0]
+})()
 
 /** -------------------- 小工具函数（保留最小集合） -------------------- */
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -76,6 +88,61 @@ const buildGenericOptions = (payload: unknown, idKeys: string[], labelKeys: stri
   return uniqueOptions(options)
 }
 
+type OsGraphic = { type: 'svg' | 'img'; content: string }
+
+const OS_ICON_KEYS = ['svg','icon','logo','image','img','icon_svg','iconSvg','logo_svg','logoSvg','iconUrl','logoUrl','icon_url','logo_url']
+const OS_ICON_SOURCE_KEYS = ['url','href','src','data']
+
+const readString = (value: unknown): string | undefined => {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number') return String(value)
+  return undefined
+}
+
+/** 允许相对路径（如 /assets/...）作为图片地址 */
+const isImgLike = (s: string) =>
+  /^(data:image|https?:)/i.test(s) || s.startsWith('/')
+
+const resolveOsGraphic = (raw?: Record<string, unknown>): OsGraphic | null => {
+  if (!raw) return null
+  for (const key of OS_ICON_KEYS) {
+    const candidate = readString(raw[key])
+    if (!candidate) continue
+    if (candidate.startsWith('<svg')) return { type: 'svg', content: candidate }
+    if (isImgLike(candidate)) return { type: 'img', content: candidate }
+  }
+  for (const key of OS_ICON_KEYS) {
+    const nested = raw[key]
+    if (!isRecord(nested)) continue
+    for (const sourceKey of OS_ICON_SOURCE_KEYS) {
+      const candidate = readString(nested[sourceKey])
+      if (!candidate) continue
+      if (candidate.startsWith('<svg')) return { type: 'svg', content: candidate }
+      if (isImgLike(candidate)) return { type: 'img', content: candidate }
+    }
+  }
+  return null
+}
+
+const gatherOsMeta = (raw: Record<string, unknown> | undefined, label: string, value: string) => {
+  if (!raw) return value !== label ? value : undefined
+  const parts = new Set<string>()
+  const version = pick(raw, ['version','version_name','ver','release'])
+  if (version) parts.add(version)
+  const arch = pick(raw, ['arch','architecture','bits'])
+  if (arch) parts.add(arch)
+  const edition = pick(raw, ['edition','variant','type'])
+  if (edition) parts.add(edition)
+  const description = pick(raw, ['description','short_description','detail'])
+  if (description) parts.add(description)
+  const user = pick(raw, ['username'])
+  if (user) parts.add(`user: ${user}`)
+  const port = pick(raw, ['port'])
+  if (port) parts.add(`port: ${port}`)
+  if (parts.size > 0) return Array.from(parts).join(' · ')
+  return value !== label ? value : undefined
+}
+
 /** 计划：更宽松地从常见键提取 id 与 label */
 const extractPlanOptions = (payload: unknown) =>
   buildGenericOptions(payload, ['id','product_id','plan_id','code'], ['name','planName','label'])
@@ -86,10 +153,49 @@ const deriveInstanceOptions = (payload: unknown) =>
 const deriveSshKeyOptions = (payload: unknown) =>
   buildGenericOptions(payload, ['id','key_id','sshKey','value'], ['name','label','fingerprint'])
 
-const deriveOsOptions = (payload: unknown) =>
-  buildGenericOptions(payload, ['id','os_id','code','value'], ['name','label','title','description'])
+/** 兼容两种返回：
+ * 1) 扁平列表 [{id,name,...}]
+ * 2) 计划内嵌结构 { os: [{ group_name, logo, os_list:[{id,name,...}]}] }
+ */
+const deriveOsOptions = (payload: unknown) => {
+  // 先尝试扁平
+  const flat = buildGenericOptions(payload, ['id','os_id','code','value'], ['name','label','title','description'])
+  if (flat.length > 0) return flat
+
+  // 尝试兼容 { os: groups[] }
+  if (isRecord(payload) && Array.isArray((payload as any).os)) {
+    return flattenPlanOs(payload as any)
+  }
+  // 直接是 groups[]
+  if (Array.isArray(payload) && payload.length && isRecord(payload[0]) && 'os_list' in (payload[0] as any)) {
+    return flattenPlanOs({ os: payload } as any)
+  }
+  return []
+}
 
 const findEndpointById = (id: string) => endpoints.find(e => e.id === id)
+
+/** 把 plan.os 扁平化成 OptionItem[]，并把 group/logo 合并到 raw */
+const flattenPlanOs = (planRaw: Record<string, unknown>): OptionItem[] => {
+  const groups = Array.isArray((planRaw as any)?.os) ? (planRaw as any).os : []
+  const out: OptionItem[] = []
+  for (const g of groups) {
+    const groupName = readString(g?.group_name) ?? readString(g?.groupName) ?? ''
+    const logo = readString(g?.logo) ?? ''
+    const list = Array.isArray(g?.os_list) ? g.os_list : []
+    for (const os of list) {
+      const id = readString(os?.id) ?? ''
+      if (!id) continue
+      const name = readString(os?.name) ?? `OS ${id}`
+      out.push({
+        value: id,
+        label: name,
+        raw: { ...(os as any), group_name: groupName, logo }
+      })
+    }
+  }
+  return uniqueOptions(out)
+}
 
 /** -------------------- 组件 -------------------- */
 function App() {
@@ -102,15 +208,27 @@ function App() {
 
   const [catalog, setCatalog] = useLocalStorage<CatalogData>('alice.catalog', defaultCatalog)
   const [prefetchState, setPrefetchState] = useState<'idle'|'loading'|'done'|'error'>('idle')
-  const [selectedEndpointId, setSelectedEndpointId] = useState(endpoints[0].id)
+  const initialEndpoint = defaultEndpoint ?? endpoints[0]
+  const [selectedEndpointId, setSelectedEndpointId] = useState(initialEndpoint?.id ?? '')
   const selectedEndpoint = useMemo(
-    () => endpoints.find(e => e.id === selectedEndpointId) ?? endpoints[0],
-    [selectedEndpointId]
+    () => endpoints.find(e => e.id === selectedEndpointId) ?? initialEndpoint ?? endpoints[0],
+    [selectedEndpointId, initialEndpoint]
   )
+  const primaryEndpoints = useMemo(
+    () => endpoints.filter(ep => PRIMARY_ENDPOINT_ID_SET.has(ep.id)),
+    []
+  )
+  const secondaryEndpoints = useMemo(
+    () => endpoints.filter(ep => !PRIMARY_ENDPOINT_ID_SET.has(ep.id)),
+    []
+  )
+  const selectedSecondaryEndpointId = secondaryEndpoints.some(ep => ep.id === selectedEndpointId)
+    ? selectedEndpointId
+    : ''
   const [formValues, setFormValues] = useState<FormValues>(() => {
-    const ep = endpoints[0]
+    const ep = initialEndpoint ?? endpoints[0]
     const o: FormValues = {}
-    ep.bodyFields?.forEach(f => o[f.key] = f.defaultValue ?? f.options?.[0]?.value ?? '')
+    ep?.bodyFields?.forEach(f => o[f.key] = f.defaultValue ?? f.options?.[0]?.value ?? '')
     return o
   })
   const [isLoading, setIsLoading] = useState(false)
@@ -120,7 +238,7 @@ function App() {
   /** 切换端点时重置该端点的默认表单值 */
   const handleEndpointChange = (id: string) => {
     setSelectedEndpointId(id)
-    const ep = endpoints.find(e => e.id === id) ?? endpoints[0]
+    const ep = endpoints.find(e => e.id === id) ?? initialEndpoint ?? endpoints[0]
     const o: FormValues = {}
     ep.bodyFields?.forEach(f => (o[f.key] = f.defaultValue ?? f.options?.[0]?.value ?? ''))
     setFormValues(o)
@@ -176,7 +294,17 @@ function App() {
             return
           }
           const parsed = t.parser ? t.parser(res.data) : []
-          if (t.key === 'plans' && parsed.length > 0) next.plans = parsed
+          if (t.key === 'plans' && parsed.length > 0) {
+            next.plans = parsed
+          for (const p of parsed) {
+            const planIdKey = String(p.value)
+            const flattened = flattenPlanOs(p.raw ?? {})
+            const existing = next.osByPlan[planIdKey]
+            if (!existing || existing.length === 0) {
+              next.osByPlan[planIdKey] = flattened
+            }
+          }
+          }
           if (t.key === 'instances' && parsed.length > 0) next.instances = parsed
           if (t.key === 'sshKeys' && parsed.length > 0) next.sshKeys = parsed
         })
@@ -193,11 +321,35 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasCredentials])
 
-  /** OS 选项按需拉取（基于 plan_id/product_id） */
-  const planIdForOs = formValues.product_id || formValues.plan_id
+  const selectedInstanceOption = useMemo(() => {
+    if (!formValues.id) return undefined
+    return catalog.instances.find(inst => inst.value === formValues.id)
+  }, [catalog.instances, formValues.id])
+
+  /** OS 选项按需拉取（基于 plan_id/product_id 或实例所属计划） */
+  const planIdForOs = useMemo(() => {
+    const directPlan =
+      formValues.product_id ||
+      formValues.plan_id ||
+      formValues['productId'] ||
+      formValues['planId'] ||
+      formValues['productID'] ||
+      formValues['planID']
+    if (directPlan) return String(directPlan)
+
+    const raw = selectedInstanceOption?.raw
+    if (raw && isRecord(raw)) {
+      return (
+        pick(raw, ['plan_id','product_id','planId','productId','plan_code','planCode','planID','productID']) ??
+        undefined
+      )
+    }
+    return undefined
+  }, [formValues, selectedInstanceOption])
+
   useEffect(() => {
     if (!hasCredentials || !planIdForOs) return
-    if (catalog.osByPlan[planIdForOs]) return
+    if (catalog.osByPlan[planIdForOs]) return  // 已经有缓存（来自 plans 预取），直接用
 
     const osEp = findEndpointById('evo-plan-os')
     if (!osEp) return
@@ -237,8 +389,13 @@ function App() {
         map[f.key] = catalog.sshKeys
         return
       }
-      if (label.includes('os') && planIdForOs) {
-        map[f.key] = catalog.osByPlan[planIdForOs] ?? []
+      const isOsField =
+        f.key === 'os_id' ||
+        f.key === 'os' ||
+        /\bos\b/.test(label) ||
+        label.includes('os id')
+      if (isOsField) {
+        map[f.key] = planIdForOs ? (catalog.osByPlan[planIdForOs] ?? []) : []
       }
     })
     return map
@@ -365,9 +522,9 @@ function App() {
         <div className="panel__header"><h2>Endpoint</h2></div>
         <div className="panel__content">
           <div className="field-group">
-            <label>Select endpoint</label>
-            <div className="endpoint-snapshots" role="listbox" aria-label="Available endpoints">
-              {endpoints.map(ep => {
+            <label>核心操作</label>
+            <div className="endpoint-snapshots" role="listbox" aria-label="Primary endpoints">
+              {(primaryEndpoints.length ? primaryEndpoints : endpoints).map(ep => {
                 const isActive = ep.id === selectedEndpointId
                 return (
                   <div
@@ -393,6 +550,26 @@ function App() {
               })}
             </div>
           </div>
+          {secondaryEndpoints.length > 0 && (
+            <div className="field-group">
+              <label htmlFor="endpoint-more">其他操作</label>
+              <select
+                id="endpoint-more"
+                value={selectedSecondaryEndpointId}
+                onChange={(e) => {
+                  const next = e.target.value
+                  if (!next) return
+                  handleEndpointChange(next)
+                }}
+              >
+                <option value="">选择其他接口…</option>
+                {secondaryEndpoints.map(ep => (
+                  <option key={ep.id} value={ep.id}>{ep.name}</option>
+                ))}
+              </select>
+              <p className="field-group__hint">完整接口列表保留在此，下拉选择即可切换。</p>
+            </div>
+          )}
           {selectedEndpoint.description && <p className="panel__hint">{selectedEndpoint.description}</p>}
           <p className="panel__meta">
             <span className="tag">{selectedEndpoint.method}</span>
@@ -403,34 +580,105 @@ function App() {
             {selectedEndpoint.bodyFields?.length ? (
               <fieldset className="form__fields">
                 {selectedEndpoint.bodyFields.map(field => {
-                  const opts = dynamicOptions[field.key] ?? field.options
-                  const hasOpts = Array.isArray(opts) && opts.length > 0
-                  const optionList = hasOpts
-                    ? (opts as (OptionItem | { value: string; label: string })[])
-                        .map((option) => ({
-                          value: option.value,
-                          label: option.label ?? option.value,
-                        }))
+                  const optionsSource = dynamicOptions[field.key] ?? field.options ?? []
+                  const optionList: DisplayOption[] = Array.isArray(optionsSource)
+                    ? (optionsSource as (OptionItem | { value: string; label: string })[]).map((option) => {
+                        if ('raw' in option) {
+                          const item = option as OptionItem
+                          return { value: item.value, label: item.label, raw: item.raw }
+                        }
+                        return { value: option.value, label: option.label ?? option.value }
+                      })
                     : []
-                  const currentValue = hasOpts
+                  const hasOptions = optionList.length > 0
+                  const currentValue = hasOptions
                     ? (formValues[field.key] ?? optionList[0]?.value ?? '')
                     : (formValues[field.key] ?? '')
                   const labelId = `label-${field.key}`
+                  const labelText = field.label ?? field.key
+                  const normalizedLabel = labelText.toLowerCase()
+                  const isOsField =
+                    field.key === 'os_id' ||
+                    field.key === 'os' ||
+                    /\bos\b/.test(normalizedLabel) ||
+                    normalizedLabel.includes('os id')
+
+                  const renderOsCards = () => {
+                    if (!hasOptions) {
+                      const emptyHint = selectedEndpoint.id === 'evo-deploy'
+                        ? '请选择 Plan 以加载可用的 OS 列表。'
+                        : selectedEndpoint.id === 'evo-rebuild'
+                          ? '请选择实例以加载可用的 OS 列表。'
+                          : '暂无可用的操作系统选项。'
+                      return (
+                        <div className="option-card option-card--os option-card--disabled" aria-disabled="true">
+                          <span className="option-card__icon option-card__icon--placeholder" aria-hidden="true">?</span>
+                          <span className="option-card__content">
+                            <span className="option-card__label">等待操作系统列表</span>
+                            <span className="option-card__meta">{emptyHint}</span>
+                          </span>
+                        </div>
+                      )
+                    }
+
+                    return optionList.map(option => {
+                      const isSelected = currentValue === option.value
+                      const graphic = resolveOsGraphic(option.raw)
+                      const meta = gatherOsMeta(option.raw, option.label, option.value)
+                      const initials = (option.label || option.value || '?').slice(0, 2).toUpperCase()
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          role="radio"
+                          aria-checked={isSelected}
+                          className={`option-card option-card--os ${isSelected ? 'option-card--active' : ''}`}
+                          onClick={() => handleFormChange(field.key, option.value)}
+                          title={meta && meta !== option.label ? `${option.label} · ${meta}` : option.label}
+                        >
+                          <span className={`option-card__icon ${graphic ? '' : 'option-card__icon--placeholder'}`} aria-hidden="true">
+                            {graphic?.type === 'img' && (
+                              <img src={graphic.content} alt="" />
+                            )}
+                            {graphic?.type === 'svg' && (
+                              <span className="option-card__icon-svg" dangerouslySetInnerHTML={{ __html: graphic.content }} />
+                            )}
+                            {!graphic && <span>{initials}</span>}
+                          </span>
+                          <span className="option-card__content">
+                            <span className="option-card__label">{option.label}</span>
+                            {meta && <span className="option-card__meta">{meta}</span>}
+                          </span>
+                        </button>
+                      )
+                    })
+                  }
+
                   return (
                     <div className="field-group" key={field.key}>
                       <label
                         id={labelId}
-                        htmlFor={!hasOpts ? `f-${field.key}` : undefined}
+                        htmlFor={!hasOptions && !isOsField ? `f-${field.key}` : undefined}
                       >
                         {field.label}{field.required && <span className="required">*</span>}
                       </label>
-                      {hasOpts ? (
+                      {isOsField ? (
+                        <div
+                          id={`f-${field.key}`}
+                          className="option-grid option-grid--os"
+                          role="radiogroup"
+                          aria-required={field.required}
+                          aria-labelledby={labelId}
+                        >
+                          {renderOsCards()}
+                        </div>
+                      ) : hasOptions ? (
                         <div
                           id={`f-${field.key}`}
                           className="option-grid"
                           role="radiogroup"
                           aria-required={field.required}
-                          aria-label={field.label}
+                          aria-label={labelText}
                           aria-labelledby={labelId}
                         >
                           {optionList.map((option) => {
