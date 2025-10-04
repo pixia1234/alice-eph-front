@@ -1,0 +1,87 @@
+
+export default {
+  async fetch(request, env, ctx) {
+    // 预检处理
+    if (request.method === 'OPTIONS') {
+      return buildCorsResponse(new Response(null, { status: 204 }), env)
+    }
+
+    if (request.method !== 'POST') {
+      return buildCorsResponse(new Response('Only POST allowed', { status: 405 }), env)
+    }
+
+    let payload
+    try {
+      payload = await request.json()
+    } catch (error) {
+      return buildCorsResponse(new Response('Invalid JSON payload', { status: 400 }), env)
+    }
+
+    const url = payload?.url
+    const method = payload?.method || 'GET'
+    const headers = payload?.headers || {}
+    const body = payload?.body || {}
+
+    // 只允许转发 Alice API，避免被滥用
+    if (!url || typeof url !== 'string' || !url.startsWith('https://app.alice.ws/cli/v1/')) {
+      return buildCorsResponse(new Response('Target not allowed', { status: 400 }), env)
+    }
+
+    const upstreamHeaders = new Headers(headers)
+    let upstreamBody
+
+    if (method !== 'GET') {
+      const form = new FormData()
+      for (const [key, value] of Object.entries(body)) {
+        if (value !== undefined && value !== null) {
+          form.append(key, value)
+        }
+      }
+      upstreamBody = form
+    }
+
+    let upstreamResponse
+    try {
+      upstreamResponse = await fetch(url, {
+        method,
+        headers: upstreamHeaders,
+        body: upstreamBody,
+      })
+    } catch (error) {
+      return buildCorsResponse(
+        new Response(`Upstream request failed: ${error.message}`, { status: 502 }),
+        env,
+      )
+    }
+
+    const text = await upstreamResponse.text()
+    const proxiedHeaders = new Headers(upstreamResponse.headers)
+    // 避免把上游的 CORS 头原样透传
+    proxiedHeaders.delete('access-control-allow-origin')
+    proxiedHeaders.delete('access-control-allow-credentials')
+
+    return buildCorsResponse(
+      new Response(text, {
+        status: upstreamResponse.status,
+        headers: proxiedHeaders,
+      }),
+      env,
+    )
+  },
+}
+
+function buildCorsResponse(response, env) {
+  const headers = new Headers(response.headers)
+  const allowOrigin = env?.ALLOWED_ORIGIN || '*'
+
+  headers.set('Access-Control-Allow-Origin', allowOrigin)
+  headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  headers.append('Vary', 'Origin')
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
