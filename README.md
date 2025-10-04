@@ -16,8 +16,8 @@ GitHub Pages 部署
   - 启用 GitHub Pages：在仓库 Settings → Pages 选择 “GitHub Actions” 作为构建来源。
   - 推送到 main 分支或手动触发 workflow_dispatch，.github/workflows/deploy.yml 会自动构建 dist 并发布到 gh-pages 环境。
   - 首次部署完成后，访问 https://**.github.io/alice-eph-front/ 即可体验；若使用自定义域名，更新 DNS 后在 Pages 中绑定。
-
-技术栈
+  - Alice 官方文档 https://api.aliceinit.io/
+技术栈 
 
   - React 19.1 + TypeScript
   - Vite 7.1 (开发/构建工具)
