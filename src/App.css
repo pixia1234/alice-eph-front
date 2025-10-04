@@ -256,6 +256,12 @@
   box-shadow: 0 6px 12px -8px rgba(79, 70, 229, 0.5);
 }
 
+.response-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+}
+
 .response {
   display: flex;
   flex-direction: column;
@@ -279,6 +285,31 @@
   gap: 0.65rem;
   color: #475569;
   font-size: 0.9rem;
+}
+
+.response__meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  color: #475569;
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
+.response__meta-pill--method {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.response__meta-pill--name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .response__message {

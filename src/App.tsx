@@ -1,4 +1,4 @@
-import { type FormEvent, useMemo, useState } from 'react'
+import { type FormEvent, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { API_BASE_URL, endpoints, type ApiEndpoint } from './api/endpoints'
 import {
@@ -19,6 +19,23 @@ type ErrorDetails = {
   durationMs?: number
 }
 
+type HistoryEntry = {
+  id: number
+  kind: 'success' | 'error'
+  endpointName: string
+  endpointMethod: ApiEndpoint['method']
+  createdAt: number
+  result?: ApiCallResult
+  error?: ErrorDetails
+}
+
+const HISTORY_LIMIT = 5
+const timeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+})
+
 const defaultCredentials: Credentials = {
   clientId: '',
   clientSecret: '',
@@ -27,7 +44,7 @@ const defaultCredentials: Credentials = {
 function getInitialValues(endpoint: ApiEndpoint): FormValues {
   return (
     endpoint.bodyFields?.reduce<FormValues>((acc, field) => {
-      acc[field.key] = field.defaultValue ?? ''
+      acc[field.key] = field.defaultValue ?? field.options?.[0]?.value ?? ''
       return acc
     }, {}) ?? {}
   )
@@ -42,8 +59,8 @@ function App() {
   )
   const [formValues, setFormValues] = useState<FormValues>(() => getInitialValues(endpoints[0]))
   const [isLoading, setIsLoading] = useState(false)
-  const [result, setResult] = useState<ApiCallResult | null>(null)
-  const [error, setError] = useState<ErrorDetails | null>(null)
+  const historyCounter = useRef(0)
+  const [history, setHistory] = useState<HistoryEntry[]>([])
 
   const handleCredentialChange = (key: keyof Credentials, value: string) => {
     setCredentials({ ...credentials, [key]: value })
@@ -53,20 +70,36 @@ function App() {
     setSelectedEndpointId(nextEndpointId)
     const nextEndpoint = endpoints.find((endpoint) => endpoint.id === nextEndpointId) ?? endpoints[0]
     setFormValues(getInitialValues(nextEndpoint))
-    setResult(null)
-    setError(null)
   }
 
   const handleFormValueChange = (key: string, value: string) => {
     setFormValues((prev) => ({ ...prev, [key]: value }))
   }
 
+  const appendHistory = (entry: Omit<HistoryEntry, 'id' | 'createdAt'>) => {
+    setHistory((prev) => {
+      const nextEntry: HistoryEntry = {
+        id: historyCounter.current++,
+        createdAt: Date.now(),
+        ...entry,
+      }
+      return [nextEntry, ...prev].slice(0, HISTORY_LIMIT)
+    })
+  }
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!selectedEndpoint) return
 
-    if (!credentials.clientId || !credentials.clientSecret) {
-      setError({ message: 'Please provide both client ID and secret before sending a request.' })
+    const trimmedId = credentials.clientId.trim()
+    const trimmedSecret = credentials.clientSecret.trim()
+    if (!trimmedId || !trimmedSecret) {
+      appendHistory({
+        kind: 'error',
+        endpointName: selectedEndpoint.name,
+        endpointMethod: selectedEndpoint.method,
+        error: { message: 'Please provide both client ID and secret before sending a request.' },
+      })
       return
     }
 
@@ -76,25 +109,41 @@ function App() {
     })
 
     setIsLoading(true)
-    setResult(null)
-    setError(null)
+
+    const endpointSnapshot = selectedEndpoint
 
     try {
-      const response = await callEndpoint(selectedEndpoint, credentials, payload)
-      setResult(response)
+      const response = await callEndpoint(endpointSnapshot, credentials, payload)
+      appendHistory({
+        kind: 'success',
+        endpointName: endpointSnapshot.name,
+        endpointMethod: endpointSnapshot.method,
+        result: response,
+      })
     } catch (unknownError) {
       if (unknownError instanceof Error) {
         const { message } = unknownError
         const extra = unknownError as ErrorDetails
-        setError({
+        const details: ErrorDetails = {
           message,
           status: extra.status,
           rawBody: extra.rawBody,
           headers: extra.headers,
           durationMs: extra.durationMs,
+        }
+        appendHistory({
+          kind: 'error',
+          endpointName: endpointSnapshot.name,
+          endpointMethod: endpointSnapshot.method,
+          error: details,
         })
       } else {
-        setError({ message: 'Unexpected error occurred.' })
+        appendHistory({
+          kind: 'error',
+          endpointName: endpointSnapshot.name,
+          endpointMethod: endpointSnapshot.method,
+          error: { message: 'Unexpected error occurred.' },
+        })
       }
     } finally {
       setIsLoading(false)
@@ -246,56 +295,72 @@ function App() {
           <h2>Response</h2>
         </div>
         <div className="panel__content">
-          {result && (
-            <div className="response">
-              <p className="response__meta">
-                <span className="tag tag--success">{result.status}</span>
-                <span>{result.durationMs.toFixed(1)} ms</span>
-              </p>
-              <pre className="code-block">
-                {typeof result.data === 'string'
-                  ? result.data
-                  : JSON.stringify(result.data, null, 2)}
-              </pre>
-              {Object.keys(result.headers).length > 0 && (
-                <details className="response__details">
-                  <summary>Response headers</summary>
-                  <ul>
-                    {Object.entries(result.headers).map(([key, value]) => (
-                      <li key={key}>
-                        <span className="header-key">{key}</span>
-                        <span className="header-value">{value}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
+          {history.length > 0 ? (
+            <div className="response-list">
+              {history.map((entry) => {
+                const isError = entry.kind === 'error'
+                const statusLabel = isError
+                  ? entry.error?.status ?? 'Error'
+                  : entry.result?.status ?? 'OK'
+                const duration = isError ? entry.error?.durationMs : entry.result?.durationMs
+                const headers = isError ? entry.error?.headers : entry.result?.headers
+
+                return (
+                  <article
+                    key={entry.id}
+                    className={`response ${isError ? 'response--error' : ''}`}
+                  >
+                    <p className="response__meta">
+                      <span className={`tag ${isError ? 'tag--error' : 'tag--success'}`}>{statusLabel}</span>
+                      <span className="response__meta-pill response__meta-pill--method">
+                        {entry.endpointMethod}
+                      </span>
+                      <span className="response__meta-pill response__meta-pill--name">
+                        {entry.endpointName}
+                      </span>
+                      {typeof duration === 'number' && (
+                        <span className="response__meta-pill">{duration.toFixed(1)} ms</span>
+                      )}
+                      <span className="response__meta-pill">{timeFormatter.format(entry.createdAt)}</span>
+                    </p>
+                    {isError ? (
+                      <>
+                        {entry.error?.message && (
+                          <p className="response__message">{entry.error.message}</p>
+                        )}
+                        {entry.error?.rawBody && (
+                          <pre className="code-block">{entry.error.rawBody}</pre>
+                        )}
+                      </>
+                    ) : (
+                      entry.result && (
+                        <pre className="code-block">
+                          {typeof entry.result.data === 'string'
+                            ? entry.result.data
+                            : JSON.stringify(entry.result.data, null, 2)}
+                        </pre>
+                      )
+                    )}
+                    {headers && Object.keys(headers).length > 0 && (
+                      <details className="response__details">
+                        <summary>Response headers</summary>
+                        <ul>
+                          {Object.entries(headers).map(([key, value]) => (
+                            <li key={key}>
+                              <span className="header-key">{key}</span>
+                              <span className="header-value">{value}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </article>
+                )
+              })}
             </div>
+          ) : (
+            <p className="panel__hint">Responses will appear here after you send a request.</p>
           )}
-          {error && (
-            <div className="response response--error">
-              <p className="response__meta">
-                <span className="tag tag--error">{error.status ?? 'Error'}</span>
-                {typeof error.durationMs === 'number' && <span>{error.durationMs.toFixed(1)} ms</span>}
-              </p>
-              <p className="response__message">{error.message}</p>
-              {error.rawBody && <pre className="code-block">{error.rawBody}</pre>}
-              {error.headers && Object.keys(error.headers).length > 0 && (
-                <details className="response__details">
-                  <summary>Response headers</summary>
-                  <ul>
-                    {Object.entries(error.headers).map(([key, value]) => (
-                      <li key={key}>
-                        <span className="header-key">{key}</span>
-                        <span className="header-value">{value}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          )}
-          {!result && !error && <p className="panel__hint">Responses will appear here after you send a request.</p>}
         </div>
       </section>
     </div>
