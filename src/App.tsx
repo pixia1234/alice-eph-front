@@ -471,8 +471,8 @@ function App() {
     <div className="app">
       <header className="hero">
         <div className="hero__badge">Alice EVO Toolkit</div>
-        <h1 className="hero__title">Ephemera API Console (Lite)</h1>
-        <p className="hero__subtitle">最小可用：凭证、端点、动态表单、发送与原始响应。</p>
+        <h1 className="hero__title">Ephemera API Console</h1>
+        <p className="hero__subtitle">By: Pixia1234</p>
         <div className="hero__meta">
           <div className="hero__stat"><span className="hero__stat-label">Endpoints</span><span className="hero__stat-value">{endpoints.length}</span></div>
           <div className={`hero__stat ${hasCredentials ? 'hero__stat--positive':'hero__stat--warning'}`}>
@@ -552,7 +552,7 @@ function App() {
           </div>
           {secondaryEndpoints.length > 0 && (
             <div className="field-group">
-              <label htmlFor="endpoint-more">其他操作</label>
+              <label htmlFor="endpoint-more">其他接口</label>
               <select
                 id="endpoint-more"
                 value={selectedSecondaryEndpointId}
