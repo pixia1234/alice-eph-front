@@ -38,23 +38,6 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
   second: '2-digit',
 })
 
-const DOC_BASE_URL = 'https://api.aliceinit.io/'
-
-const endpointDocHints: Record<string, string> = {
-  'evo-instance-list': '#/EVO/Instance',
-  'evo-deploy': '#/EVO/Deploy',
-  'evo-destroy': '#/EVO/Destroy',
-  'evo-power': '#/EVO/Power',
-  'evo-rebuild': '#/EVO/Rebuild',
-  'evo-plan-list': '#/EVO/Plan',
-  'evo-plan-os': '#/EVO/getOSByPlan',
-  'evo-renewal': '#/EVO/Renewal',
-  'evo-instance-state': '#/EVO/State',
-  'user-sshkeys': '#/User/SSHKey',
-  'user-evo-permissions': '#/User/EVOPermissions',
-  'user-info': '#/User/Info',
-}
-
 type PreviewBlock =
   | { type: 'keyValue'; title?: string; entries: { label: string; value: string }[] }
   | { type: 'chips'; title?: string; items: string[] }
@@ -80,6 +63,30 @@ type PreviewMeta = {
   metrics?: { label: string; value: string }[]
 }
 
+type OptionItem = {
+  value: string
+  label: string
+  raw?: Record<string, unknown>
+}
+
+type CatalogData = {
+  plans: OptionItem[]
+  instances: OptionItem[]
+  sshKeys: OptionItem[]
+  osByPlan: Record<string, OptionItem[]>
+  userInfo?: unknown
+  lastUpdated?: number
+}
+
+const defaultCatalog: CatalogData = {
+  plans: [],
+  instances: [],
+  sshKeys: [],
+  osByPlan: {},
+  userInfo: undefined,
+  lastUpdated: undefined,
+}
+
 const defaultCredentials: Credentials = {
   clientId: '',
   clientSecret: '',
@@ -92,15 +99,6 @@ function getInitialValues(endpoint: ApiEndpoint): FormValues {
       return acc
     }, {}) ?? {}
   )
-}
-
-function getDocUrl(endpoint: { id: string; path: string }) {
-  const hint = endpointDocHints[endpoint.id]
-  if (hint) {
-    return `${DOC_BASE_URL}${hint}`
-  }
-  const sanitized = endpoint.path.replace(/^\//, '').replace(/\//g, '-')
-  return `${DOC_BASE_URL}#${sanitized}`
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -387,12 +385,131 @@ function pickValue(record: Record<string, unknown>, candidates: string[]) {
   return undefined
 }
 
-type ResponseCardProps = {
-  entry: HistoryEntry
-  docUrl: string
+function findEndpointById(id: string) {
+  return endpoints.find((endpoint) => endpoint.id === id)
 }
 
-function ResponseCard({ entry, docUrl }: ResponseCardProps) {
+function unwrapList(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload
+  if (isRecord(payload)) {
+    const keys = [
+      'data',
+      'datas',
+      'result',
+      'results',
+      'payload',
+      'list',
+      'items',
+      'instances',
+      'plans',
+      'entries',
+      'sshKeys',
+    ]
+    for (const key of keys) {
+      const candidate = payload[key]
+      if (Array.isArray(candidate)) {
+        return candidate
+      }
+    }
+  }
+  return []
+}
+
+function uniqueOptions(options: OptionItem[]) {
+  const seen = new Set<string>()
+  return options.filter((option) => {
+    if (seen.has(option.value)) return false
+    seen.add(option.value)
+    return true
+  })
+}
+
+function derivePlanOptions(payload: unknown): OptionItem[] {
+  const items = unwrapList(payload)
+  const options: OptionItem[] = []
+
+  items.forEach((item) => {
+    if (!isRecord(item)) return
+    const idCandidate = pickValue(item, ['product_id', 'plan_id', 'id', 'code'])
+    if (!idCandidate) return
+    const labelCandidate =
+      pickValue(item, ['name', 'planName', 'label', 'title', 'display_name']) ??
+      pickValue(item, ['product_id', 'plan_id', 'id', 'code'])
+
+    const priceCandidate = pickValue(item, ['price', 'hourly_price', 'monthly_price'])
+    const labelParts = [labelCandidate?.value ?? idCandidate.value]
+    if (priceCandidate?.value) {
+      labelParts.push(`¥${priceCandidate.value}`)
+    }
+
+    options.push({ value: idCandidate.value, label: labelParts.join(' · '), raw: item })
+  })
+
+  return uniqueOptions(options)
+}
+
+function deriveInstanceOptions(payload: unknown): OptionItem[] {
+  const items = unwrapList(payload)
+  const options: OptionItem[] = []
+
+  items.forEach((item) => {
+    if (!isRecord(item)) return
+    const idCandidate = pickValue(item, ['id', 'instance_id', 'instanceId'])
+    if (!idCandidate) return
+    const nameCandidate =
+      pickValue(item, ['name', 'label', 'hostname']) ??
+      pickValue(item, ['product', 'plan'])
+    const statusCandidate = pickValue(item, ['status', 'state', 'power'])
+
+    const labelParts = [nameCandidate?.value ?? `Instance ${idCandidate.value}`]
+    if (statusCandidate?.value) {
+      labelParts.push(statusCandidate.value)
+    }
+
+    options.push({ value: idCandidate.value, label: labelParts.join(' · '), raw: item })
+  })
+
+  return uniqueOptions(options)
+}
+
+function deriveOsOptions(payload: unknown): OptionItem[] {
+  const items = unwrapList(payload)
+  const options: OptionItem[] = []
+
+  items.forEach((item) => {
+    if (!isRecord(item)) return
+    const idCandidate = pickValue(item, ['id', 'os_id', 'code', 'value'])
+    if (!idCandidate) return
+    const labelCandidate =
+      pickValue(item, ['name', 'label', 'title', 'display', 'description']) ?? idCandidate
+
+    options.push({ value: idCandidate.value, label: labelCandidate.value, raw: item })
+  })
+
+  return uniqueOptions(options)
+}
+
+function deriveSshKeyOptions(payload: unknown): OptionItem[] {
+  const items = unwrapList(payload)
+  const options: OptionItem[] = []
+
+  items.forEach((item) => {
+    if (!isRecord(item)) return
+    const idCandidate = pickValue(item, ['id', 'key_id', 'sshKey', 'value'])
+    if (!idCandidate) return
+    const labelCandidate = pickValue(item, ['name', 'label', 'fingerprint']) ?? idCandidate
+
+    options.push({ value: idCandidate.value, label: labelCandidate.value, raw: item })
+  })
+
+  return uniqueOptions(options)
+}
+
+type ResponseCardProps = {
+  entry: HistoryEntry
+}
+
+function ResponseCard({ entry }: ResponseCardProps) {
   const isError = entry.kind === 'error'
   const statusLabel = isError ? entry.error?.status ?? 'Error' : entry.result?.status ?? 'OK'
   const duration = isError ? entry.error?.durationMs : entry.result?.durationMs
@@ -442,9 +559,6 @@ function ResponseCard({ entry, docUrl }: ResponseCardProps) {
           )}
           <span className="response__meta-pill">{timeFormatter.format(entry.createdAt)}</span>
         </div>
-        <a className="response__doc-link" href={docUrl} target="_blank" rel="noreferrer">
-          Docs ↗
-        </a>
       </header>
 
       {!isError && preview.meta && (
@@ -597,6 +711,10 @@ function ResponseCard({ entry, docUrl }: ResponseCardProps) {
 
 function App() {
   const [credentials, setCredentials] = useLocalStorage<Credentials>('alice.credentials', defaultCredentials)
+  const [catalog, setCatalog] = useLocalStorage<CatalogData>('alice.catalog', defaultCatalog)
+  const [prefetchState, setPrefetchState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
+  const [prefetchError, setPrefetchError] = useState<string | null>(null)
+  const [pendingOsPlan, setPendingOsPlan] = useState<string | null>(null)
   const [selectedEndpointId, setSelectedEndpointId] = useState(endpoints[0].id)
   const selectedEndpoint = useMemo(
     () => endpoints.find((endpoint) => endpoint.id === selectedEndpointId) ?? endpoints[0],
@@ -606,6 +724,36 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const historyCounter = useRef(0)
   const [history, setHistory] = useState<HistoryEntry[]>([])
+  const sanitizedCredentials = useMemo<Credentials>(
+    () => ({
+      clientId: credentials.clientId.trim(),
+      clientSecret: credentials.clientSecret.trim(),
+    }),
+    [credentials],
+  )
+  const hasCredentials =
+    sanitizedCredentials.clientId.length > 0 && sanitizedCredentials.clientSecret.length > 0
+  const credentialsFingerprint = `${sanitizedCredentials.clientId}|${sanitizedCredentials.clientSecret}`
+  const previousFingerprint = useRef<string>('')
+
+  useEffect(() => {
+    const isEmpty = !sanitizedCredentials.clientId && !sanitizedCredentials.clientSecret
+    if (isEmpty) {
+      previousFingerprint.current = ''
+      return
+    }
+
+    if (
+      previousFingerprint.current &&
+      previousFingerprint.current !== credentialsFingerprint
+    ) {
+      setCatalog({ ...defaultCatalog, osByPlan: {} })
+      setPrefetchState('idle')
+      setPrefetchError(null)
+    }
+
+    previousFingerprint.current = credentialsFingerprint
+  }, [credentialsFingerprint, sanitizedCredentials.clientId, sanitizedCredentials.clientSecret, setCatalog, setPrefetchError, setPrefetchState])
 
   const handleCredentialChange = (key: keyof Credentials, value: string) => {
     setCredentials({ ...credentials, [key]: value })
@@ -632,12 +780,256 @@ function App() {
     })
   }
 
+  useEffect(() => {
+    if (!hasCredentials) return
+    if (prefetchState === 'loading') return
+
+    const needsPlans = catalog.plans.length === 0
+    const needsInstances = catalog.instances.length === 0
+    const needsSshKeys = catalog.sshKeys.length === 0
+    const needsUser = !catalog.userInfo
+    const isStale =
+      typeof catalog.lastUpdated !== 'number' || Date.now() - catalog.lastUpdated > 1000 * 60 * 5
+
+    if (!(needsPlans || needsInstances || needsSshKeys || needsUser || isStale)) {
+      return
+    }
+
+    if (prefetchState === 'error' && !isStale) {
+      return
+    }
+
+    let cancelled = false
+
+    async function prefetchReferenceData() {
+      setPrefetchState('loading')
+      setPrefetchError(null)
+
+      const targets = [
+        { key: 'plans' as const, endpointId: 'evo-plan-list' },
+        { key: 'instances' as const, endpointId: 'evo-instance-list' },
+        { key: 'sshKeys' as const, endpointId: 'user-sshkeys' },
+        { key: 'userInfo' as const, endpointId: 'user-info' },
+      ]
+
+      const results = await Promise.allSettled(
+        targets.map(async (target) => {
+          const endpoint = findEndpointById(target.endpointId)
+          if (!endpoint) {
+            throw new Error(`Missing endpoint definition for ${target.endpointId}`)
+          }
+          const response = await callEndpoint(endpoint, sanitizedCredentials, {} as ApiCallPayload)
+          return { target, response }
+        }),
+      )
+
+      if (cancelled) return
+
+      let successCount = 0
+      let planUpdate: OptionItem[] | undefined
+      let instanceUpdate: OptionItem[] | undefined
+      let sshUpdate: OptionItem[] | undefined
+      let userUpdate: unknown | undefined
+
+      results.forEach((result) => {
+        if (result.status !== 'fulfilled') {
+          console.warn('Prefetch request failed.', result.reason)
+          return
+        }
+
+        successCount += 1
+        const { target, response } = result.value
+
+        if (target.key === 'plans') {
+          const options = derivePlanOptions(response.data)
+          if (options.length > 0) {
+            planUpdate = options
+          }
+          return
+        }
+
+        if (target.key === 'instances') {
+          const options = deriveInstanceOptions(response.data)
+          if (options.length > 0) {
+            instanceUpdate = options
+          }
+          return
+        }
+
+        if (target.key === 'sshKeys') {
+          const options = deriveSshKeyOptions(response.data)
+          if (options.length >= 0) {
+            sshUpdate = options
+          }
+          return
+        }
+
+        if (target.key === 'userInfo') {
+          userUpdate = response.data ?? response.rawBody
+        }
+      })
+
+      const effectivePlans = planUpdate ?? catalog.plans
+      const essentialsReady = effectivePlans.length > 0
+
+      setCatalog((prev) => {
+        const next: CatalogData = {
+          ...prev,
+          osByPlan: { ...prev.osByPlan },
+        }
+
+        if (planUpdate) {
+          next.plans = planUpdate
+        }
+        if (instanceUpdate) {
+          next.instances = instanceUpdate
+        }
+        if (sshUpdate) {
+          next.sshKeys = sshUpdate
+        }
+        if (userUpdate !== undefined) {
+          next.userInfo = userUpdate
+        }
+        next.lastUpdated = Date.now()
+        return next
+      })
+
+      if (successCount > 0 && essentialsReady) {
+        setPrefetchState('done')
+      } else {
+        setPrefetchState('error')
+        setPrefetchError('自动加载参考数据失败，请稍后重试。')
+      }
+    }
+
+    prefetchReferenceData()
+
+    return () => {
+      cancelled = true
+    }
+  }, [catalog, hasCredentials, sanitizedCredentials, prefetchState, setCatalog])
+
+  const planIdForOs = formValues.product_id || formValues.plan_id
+
+  const dynamicOptions = useMemo<Record<string, OptionItem[]>>(() => {
+    const map: Record<string, OptionItem[]> = {}
+    const fields = selectedEndpoint.bodyFields ?? []
+
+    fields.forEach((field) => {
+      const labelLower = field.label.toLowerCase()
+
+      if (field.key === 'product_id' || field.key === 'plan_id' || labelLower.includes('plan id')) {
+        map[field.key] = catalog.plans
+        return
+      }
+
+      if (field.key === 'id' || labelLower.includes('instance id')) {
+        map[field.key] = catalog.instances
+        return
+      }
+
+      if (labelLower.includes('ssh key')) {
+        map[field.key] = catalog.sshKeys
+        return
+      }
+
+      if (labelLower.includes('os') && planIdForOs) {
+        map[field.key] = catalog.osByPlan[planIdForOs] ?? []
+      }
+    })
+
+    return map
+  }, [catalog.instances, catalog.osByPlan, catalog.plans, catalog.sshKeys, planIdForOs, selectedEndpoint])
+
+  const accountLabel = useMemo(() => {
+    const info = catalog.userInfo
+    if (!info) return null
+    if (typeof info === 'string') {
+      const trimmed = info.trim()
+      return trimmed.length > 0 ? trimmed : null
+    }
+    if (isRecord(info)) {
+      const primary =
+        pickValue(info, ['name', 'username', 'email', 'account', 'account_name']) ??
+        pickValue(info, ['id'])
+      return primary?.value ?? null
+    }
+    return null
+  }, [catalog.userInfo])
+
+  useEffect(() => {
+    const fields = selectedEndpoint.bodyFields ?? []
+    const updates: Record<string, string> = {}
+
+    fields.forEach((field) => {
+      const options = dynamicOptions[field.key]
+      if (!options || options.length === 0) return
+      const currentValue = formValues[field.key]
+      if (!currentValue || !options.some((option) => option.value === currentValue)) {
+        updates[field.key] = options[0]?.value ?? ''
+      }
+    })
+
+    if (Object.keys(updates).length > 0) {
+      setFormValues((prev) => ({ ...prev, ...updates }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dynamicOptions, selectedEndpoint.id])
+
+  useEffect(() => {
+    if (!planIdForOs || !hasCredentials) return
+    if (catalog.osByPlan[planIdForOs]) return
+    if (pendingOsPlan === planIdForOs) return
+
+    const osEndpoint = findEndpointById('evo-plan-os')
+    if (!osEndpoint) return
+
+    let cancelled = false
+    setPendingOsPlan(planIdForOs)
+
+    ;(async () => {
+      try {
+        const response = await callEndpoint(osEndpoint, sanitizedCredentials, {
+          plan_id: planIdForOs,
+        })
+        if (cancelled) return
+        const osOptions = deriveOsOptions(response.data)
+        setCatalog((prev) => ({
+          ...prev,
+          osByPlan: {
+            ...prev.osByPlan,
+            [planIdForOs]: osOptions,
+          },
+        }))
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('Failed to load OS list for plan', planIdForOs, error)
+          setCatalog((prev) => ({
+            ...prev,
+            osByPlan: {
+              ...prev.osByPlan,
+              [planIdForOs]: [],
+            },
+          }))
+        }
+      } finally {
+        if (!cancelled) {
+          setPendingOsPlan((current) => (current === planIdForOs ? null : current))
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [catalog.osByPlan, hasCredentials, planIdForOs, pendingOsPlan, sanitizedCredentials, setCatalog])
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!selectedEndpoint) return
 
-    const trimmedId = credentials.clientId.trim()
-    const trimmedSecret = credentials.clientSecret.trim()
+    const trimmedId = sanitizedCredentials.clientId
+    const trimmedSecret = sanitizedCredentials.clientSecret
     if (!trimmedId || !trimmedSecret) {
       appendHistory({
         kind: 'error',
@@ -660,7 +1052,7 @@ function App() {
     const endpointSnapshot = selectedEndpoint
 
     try {
-      const response = await callEndpoint(endpointSnapshot, credentials, payload)
+      const response = await callEndpoint(endpointSnapshot, sanitizedCredentials, payload)
       appendHistory({
         kind: 'success',
         endpointId: endpointSnapshot.id,
@@ -703,15 +1095,19 @@ function App() {
     }
   }
 
+  const handleRefreshCatalog = () => {
+    setCatalog({ ...defaultCatalog, osByPlan: {} })
+    setPrefetchState('idle')
+    setPrefetchError(null)
+  }
+
   const handleClearCredentials = () => {
     setCredentials(defaultCredentials)
+    handleRefreshCatalog()
   }
 
   const requestUrl = useMemo(() => `${API_BASE_URL}${selectedEndpoint.path}`, [selectedEndpoint])
-  const selectedDocUrl = useMemo(() => getDocUrl(selectedEndpoint), [selectedEndpoint])
   const totalEndpoints = endpoints.length
-  const hasCredentials =
-    credentials.clientId.trim().length > 0 && credentials.clientSecret.trim().length > 0
   const credentialStatus = hasCredentials ? 'Ready' : 'Missing'
   const credentialTone = hasCredentials ? 'hero__stat--positive' : 'hero__stat--warning'
   const baseDisplay = API_BASE_URL.startsWith('http')
@@ -736,17 +1132,14 @@ function App() {
             <span className="hero__stat-label">Credentials</span>
             <span className="hero__stat-value">{credentialStatus}</span>
           </div>
+          {accountLabel && (
+            <div className="hero__stat" title={accountLabel}>
+              <span className="hero__stat-label">Account</span>
+              <span className="hero__stat-value hero__stat-value--sm">{accountLabel}</span>
+            </div>
+          )}
           <span className="hero__pill" title={API_BASE_URL}>
             Base: {baseDisplay}
-          </span>
-        </div>
-        <div className="hero__cta">
-          <a className="link-button" href={selectedDocUrl} target="_blank" rel="noreferrer">
-            Official API docs
-          </a>
-          <span className="hero__cta-note">
-            Previews adapt to the fixed JSON schema published by Alice to feel less like raw API
-            traffic.
           </span>
         </div>
       </header>
@@ -754,9 +1147,19 @@ function App() {
       <section className="panel">
         <div className="panel__header">
           <h2>Credentials</h2>
-          <button type="button" onClick={handleClearCredentials} className="ghost-button">
-            Clear
-          </button>
+          <div className="panel__actions">
+            <button
+              type="button"
+              onClick={handleRefreshCatalog}
+              className="ghost-button"
+              disabled={!hasCredentials}
+            >
+              Refresh data
+            </button>
+            <button type="button" onClick={handleClearCredentials} className="ghost-button">
+              Clear
+            </button>
+          </div>
         </div>
         <div className="panel__content">
           <div className="field-group">
@@ -781,6 +1184,17 @@ function App() {
             />
           </div>
           <p className="panel__hint">Credentials are stored only in this browser via localStorage.</p>
+          {hasCredentials && (
+            <p className="panel__hint panel__hint--status">
+              {prefetchState === 'loading'
+                ? '正在同步 plan、实例等基础数据…'
+                : prefetchState === 'error'
+                  ? prefetchError ?? '自动同步失败，请稍后重试。'
+                  : catalog.lastUpdated
+                    ? `基础数据同步于 ${new Date(catalog.lastUpdated).toLocaleTimeString()}`
+                    : '基础数据同步完毕。'}
+            </p>
+          )}
         </div>
       </section>
 
@@ -827,9 +1241,6 @@ function App() {
           <p className="panel__meta">
             <span className="tag">{selectedEndpoint.method}</span>
             <code>{requestUrl}</code>
-            <a className="doc-link" href={selectedDocUrl} target="_blank" rel="noreferrer">
-              Docs ↗
-            </a>
           </p>
           <form className="form" onSubmit={handleSubmit}>
               {selectedEndpoint.bodyFields && selectedEndpoint.bodyFields.length > 0 && (
@@ -840,29 +1251,92 @@ function App() {
                         {field.label}
                         {field.required && <span className="required">*</span>}
                       </label>
-                      {field.options ? (
-                        <select
-                          id={`field-${field.key}`}
-                          value={formValues[field.key] ?? field.options[0]?.value ?? ''}
-                          onChange={(event) => handleFormValueChange(field.key, event.target.value)}
-                          required={field.required}
-                        >
-                          {field.options.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          id={`field-${field.key}`}
-                          value={formValues[field.key] ?? ''}
-                          onChange={(event) => handleFormValueChange(field.key, event.target.value)}
-                          placeholder={field.placeholder}
-                          required={field.required}
-                        />
-                      )}
+                      {(() => {
+                        const dynamicList = dynamicOptions[field.key]
+                        const labelLower = field.label.toLowerCase()
+                        const isOsField = labelLower.includes('os')
+                        const isPlanField =
+                          field.key === 'product_id' || field.key === 'plan_id' || labelLower.includes('plan id')
+                        const isInstanceField = field.key === 'id' || labelLower.includes('instance id')
+                        const isSshField = labelLower.includes('ssh key')
+                        const loadingOs = isOsField && pendingOsPlan === planIdForOs
+                        const isLoadingDynamic =
+                          (!isOsField && prefetchState === 'loading' && (isPlanField || isInstanceField || isSshField)) ||
+                          loadingOs
+
+                        if (dynamicList) {
+                          const hasOptions = dynamicList.length > 0
+                          const shouldFallbackToInput = !hasOptions && prefetchState === 'error'
+                          if (!shouldFallbackToInput) {
+                            const selectValue = hasOptions ? formValues[field.key] ?? dynamicList[0]?.value ?? '' : ''
+                            const disableSelect = (!hasOptions && field.required) || (loadingOs && !hasOptions)
+                            return (
+                              <select
+                                id={`field-${field.key}`}
+                                value={selectValue}
+                                onChange={(event) => handleFormValueChange(field.key, event.target.value)}
+                                required={field.required && hasOptions}
+                                disabled={disableSelect}
+                              >
+                                {hasOptions ? (
+                                  dynamicList.map((option) => (
+                                    <option key={option.value} value={option.value} title={option.label}>
+                                      {option.label}
+                                    </option>
+                                  ))
+                                ) : (
+                                  <option value="">
+                                    {isLoadingDynamic ? '正在加载选项…' : '暂无可选项'}
+                                  </option>
+                                )}
+                              </select>
+                            )
+                          }
+                        }
+
+                        if (field.options) {
+                          return (
+                            <select
+                              id={`field-${field.key}`}
+                              value={formValues[field.key] ?? field.options[0]?.value ?? ''}
+                              onChange={(event) => handleFormValueChange(field.key, event.target.value)}
+                              required={field.required}
+                            >
+                              {field.options.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          )
+                        }
+
+                        return (
+                          <input
+                            id={`field-${field.key}`}
+                            value={formValues[field.key] ?? ''}
+                            onChange={(event) => handleFormValueChange(field.key, event.target.value)}
+                            placeholder={field.placeholder}
+                            required={field.required}
+                          />
+                        )
+                      })()}
                       {field.helperText && <p className="field-group__hint">{field.helperText}</p>}
+                      {dynamicOptions[field.key] &&
+                        dynamicOptions[field.key].length === 0 &&
+                        prefetchState === 'done' && (
+                          <p className="field-group__hint">暂无可用数据</p>
+                        )}
+                      {dynamicOptions[field.key] && prefetchState === 'loading' && (
+                        <p className="field-group__hint">正在同步基础数据…</p>
+                      )}
+                      {dynamicOptions[field.key] && prefetchState === 'error' && (
+                        <p className="field-group__hint">
+                          {!dynamicOptions[field.key].length
+                            ? '自动同步失败，可手动输入或稍后重试。'
+                            : '数据来自上次可用的缓存，若有疑问请刷新。'}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </fieldset>
@@ -882,13 +1356,7 @@ function App() {
           {history.length > 0 ? (
             <div className="response-list">
               {history.map((entry) => {
-                const endpointReference =
-                  endpoints.find((candidate) => candidate.id === entry.endpointId) ?? {
-                    id: entry.endpointId,
-                    path: entry.endpointPath,
-                  }
-                const docUrl = getDocUrl(endpointReference)
-                return <ResponseCard key={entry.id} entry={entry} docUrl={docUrl} />
+                return <ResponseCard key={entry.id} entry={entry} />
               })}
             </div>
           ) : (
