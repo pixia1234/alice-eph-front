@@ -106,12 +106,37 @@ function App() {
   }
 
   const requestUrl = useMemo(() => `${API_BASE_URL}${selectedEndpoint.path}`, [selectedEndpoint])
+  const totalEndpoints = endpoints.length
+  const hasCredentials =
+    credentials.clientId.trim().length > 0 && credentials.clientSecret.trim().length > 0
+  const credentialStatus = hasCredentials ? 'Ready' : 'Missing'
+  const credentialTone = hasCredentials ? 'hero__stat--positive' : 'hero__stat--warning'
+  const baseDisplay = API_BASE_URL.startsWith('http')
+    ? API_BASE_URL.replace(/^https?:\/\//, '')
+    : API_BASE_URL
 
   return (
     <div className="app">
-      <header className="app__header">
-        <h1>Alice Ephemera API Console</h1>
-        <p>Store your API credentials locally and explore the available EVO endpoints.</p>
+      <header className="hero">
+        <div className="hero__badge">Alice EVO Toolkit</div>
+        <h1 className="hero__title">Ephemera API Console</h1>
+        <p className="hero__subtitle">
+          Store your credentials locally, explore live endpoints, and inspect responses without
+          leaving the browser.
+        </p>
+        <div className="hero__meta">
+          <div className="hero__stat">
+            <span className="hero__stat-label">Endpoints</span>
+            <span className="hero__stat-value">{totalEndpoints}</span>
+          </div>
+          <div className={`hero__stat ${credentialTone}`}>
+            <span className="hero__stat-label">Credentials</span>
+            <span className="hero__stat-value">{credentialStatus}</span>
+          </div>
+          <span className="hero__pill" title={API_BASE_URL}>
+            Base: {baseDisplay}
+          </span>
+        </div>
       </header>
 
       <section className="panel">
