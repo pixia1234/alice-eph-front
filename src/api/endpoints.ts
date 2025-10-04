@@ -1,7 +1,7 @@
-const DEFAULT_API_BASE = '/api'
+const DEFAULT_API_BASE = (import.meta.env?.DEV ? '/api' : 'https://app.alice.ws/cli/v1')
 const ENV_API_BASE = import.meta.env?.VITE_API_BASE_URL as string | undefined
 
-export const API_BASE_URL = (ENV_API_BASE ? ENV_API_BASE.replace(/\/$/, '') : DEFAULT_API_BASE)
+export const API_BASE_URL = (ENV_API_BASE ? ENV_API_BASE : DEFAULT_API_BASE).replace(/\/$/, '')
 
 export type ApiField = {
   key: string
