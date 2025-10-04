@@ -38,6 +38,48 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
   second: '2-digit',
 })
 
+type OsVariant = {
+  id: string
+  name: string
+  username?: string
+  port?: number
+}
+
+type OsGroupDetail = {
+  id: string
+  name: string
+  logo?: string
+  variants: OsVariant[]
+}
+
+type PlanDetail = {
+  id: string
+  name: string
+  description?: string
+  stock?: number
+  cpu?: number
+  cpuName?: string
+  memoryMb?: number
+  diskGb?: number
+  diskType?: string
+  gpu?: string | null
+  networkSpeed?: string
+  regionId?: number
+  regionName?: string
+  osGroups: OsGroupDetail[]
+}
+
+type InstanceSummary = {
+  id: string
+  hostname?: string
+  ipv4?: string
+  ipv6?: string
+  plan?: string
+  status?: string
+  region?: string
+  expiresAt?: string
+}
+
 type PreviewBlock =
   | { type: 'keyValue'; title?: string; entries: { label: string; value: string }[] }
   | { type: 'chips'; title?: string; items: string[] }
@@ -47,6 +89,8 @@ type PreviewBlock =
       items: PreviewEntity[]
       remainder?: number
     }
+  | { type: 'planGrid'; title?: string; plans: PlanDetail[] }
+  | { type: 'instanceList'; title?: string; items: InstanceSummary[] }
   | { type: 'text'; title?: string; body: string }
 
 type PreviewEntity = {
@@ -71,6 +115,7 @@ type OptionItem = {
 
 type CatalogData = {
   plans: OptionItem[]
+  planDetails: PlanDetail[]
   instances: OptionItem[]
   sshKeys: OptionItem[]
   osByPlan: Record<string, OptionItem[]>
@@ -80,6 +125,7 @@ type CatalogData = {
 
 const defaultCatalog: CatalogData = {
   plans: [],
+  planDetails: [],
   instances: [],
   sshKeys: [],
   osByPlan: {},
@@ -278,6 +324,28 @@ function buildBlocksFromArray(array: unknown[], keyHint?: string): PreviewBlock[
     ]
   }
 
+  const planDetails = extractPlanDetailsFromArray(array)
+  if (planDetails.length > 0) {
+    return [
+      {
+        type: 'planGrid',
+        title: keyHint ? toLabel(keyHint) : undefined,
+        plans: planDetails.slice(0, 6),
+      },
+    ]
+  }
+
+  const instanceSummaries = extractInstanceSummaries(array)
+  if (instanceSummaries.length > 0) {
+    return [
+      {
+        type: 'instanceList',
+        title: keyHint ? toLabel(keyHint) : undefined,
+        items: instanceSummaries.slice(0, 6),
+      },
+    ]
+  }
+
   if (array.every((item) => !isRecord(item))) {
     return [
       {
@@ -424,28 +492,224 @@ function uniqueOptions(options: OptionItem[]) {
   })
 }
 
-function derivePlanOptions(payload: unknown): OptionItem[] {
+function formatCpu(count?: number) {
+  if (count === undefined || count === null) return null
+  return `${count} vCPU`
+}
+
+function formatMemory(memoryMb?: number) {
+  if (memoryMb === undefined || memoryMb === null || Number.isNaN(memoryMb)) return null
+  if (memoryMb >= 1024) {
+    const gb = memoryMb / 1024
+    const formatted = gb % 1 === 0 ? gb.toFixed(0) : gb.toFixed(1)
+    return `${formatted} GB`
+  }
+  return `${memoryMb} MB`
+}
+
+function formatDisk(diskGb?: number, diskType?: string) {
+  if (diskGb === undefined || diskGb === null || Number.isNaN(diskGb)) return null
+  const diskLabel = diskGb % 1 === 0 ? diskGb.toFixed(0) : diskGb.toFixed(1)
+  return `${diskLabel} GB${diskType ? ` ${diskType}` : ''}`.trim()
+}
+
+const ALICE_ASSET_BASE = 'https://app.alice.ws'
+
+function resolveAssetPath(path: unknown) {
+  if (typeof path !== 'string' || path.trim().length === 0) return undefined
+  if (/^https?:\/\//i.test(path) || path.startsWith('data:')) return path
+  if (path.startsWith('//')) return `https:${path}`
+  if (path.startsWith('/')) return `${ALICE_ASSET_BASE}${path}`
+  return `${ALICE_ASSET_BASE}/${path}`
+}
+
+function toPlanDetail(record: Record<string, unknown>): PlanDetail | null {
+  const rawId = record.id ?? record.product_id ?? record.plan_id ?? record.code
+  if (rawId === undefined || rawId === null) return null
+  const id = String(rawId)
+  const name = String(record.name ?? record.planName ?? record.label ?? `Plan ${id}`)
+  const description = typeof record.description === 'string' ? record.description : undefined
+  const stock = typeof record.stock === 'number' ? record.stock : undefined
+  const cpu = typeof record.cpu === 'number' ? record.cpu : undefined
+  const cpuName = typeof record.cpu_name === 'string' ? record.cpu_name : undefined
+  const memoryMb = typeof record.memory === 'number' ? record.memory : undefined
+  const diskGb = typeof record.disk === 'number' ? record.disk : undefined
+  const diskType = typeof record.disk_type === 'string' ? record.disk_type : undefined
+  const gpu = record.gpu ?? null
+  const networkSpeed = typeof record.network_speed === 'string' ? record.network_speed : undefined
+  const regionId = typeof record.region_id === 'number' ? record.region_id : undefined
+  const regionName = typeof record.region === 'string' ? record.region : undefined
+  const osGroupsRaw = Array.isArray(record.os) ? record.os : []
+
+  const osGroups: OsGroupDetail[] = []
+
+  osGroupsRaw.forEach((group) => {
+    if (!isRecord(group)) return
+    const rawGroupId = group.group_id ?? group.id ?? group.code
+    if (rawGroupId === undefined || rawGroupId === null) return
+    const groupId = String(rawGroupId)
+    const groupName = String(group.group_name ?? group.name ?? `Group ${groupId}`)
+    const logoUrl = resolveAssetPath(group.logo)
+    const variantsRaw = Array.isArray(group.os_list) ? group.os_list : Array.isArray(group.items) ? group.items : []
+    const variants: OsVariant[] = []
+
+    variantsRaw.forEach((variant) => {
+      if (!isRecord(variant)) return
+      const rawVariantId = variant.id ?? variant.os_id ?? variant.code
+      if (rawVariantId === undefined || rawVariantId === null) return
+      const variantId = String(rawVariantId)
+      const variantName = String(variant.name ?? variant.label ?? `OS ${variantId}`)
+      variants.push({
+        id: variantId,
+        name: variantName,
+        username: typeof variant.username === 'string' ? variant.username : undefined,
+        port: typeof variant.port === 'number' ? variant.port : undefined,
+      })
+    })
+
+    osGroups.push({
+      id: groupId,
+      name: groupName,
+      logo: logoUrl,
+      variants,
+    })
+  })
+
+  return {
+    id,
+    name,
+    description,
+    stock,
+    cpu,
+    cpuName,
+    memoryMb,
+    diskGb,
+    diskType,
+    gpu: gpu as string | null,
+    networkSpeed,
+    regionId,
+    regionName,
+    osGroups,
+  }
+}
+
+function buildPlanOptionLabel(plan: PlanDetail) {
+  const parts: string[] = []
+  const cpuLabel = formatCpu(plan.cpu)
+  if (cpuLabel) parts.push(cpuLabel)
+  const memoryLabel = formatMemory(plan.memoryMb)
+  if (memoryLabel) parts.push(memoryLabel)
+  const diskLabel = formatDisk(plan.diskGb, plan.diskType)
+  if (diskLabel) parts.push(diskLabel)
+  if (plan.networkSpeed) parts.push(plan.networkSpeed)
+  return parts.length > 0 ? `${plan.name} · ${parts.join(' · ')}` : plan.name
+}
+
+function extractPlanCatalog(payload: unknown) {
   const items = unwrapList(payload)
+  const details: PlanDetail[] = []
   const options: OptionItem[] = []
+  const osByPlan: Record<string, OptionItem[]> = {}
 
   items.forEach((item) => {
     if (!isRecord(item)) return
-    const idCandidate = pickValue(item, ['product_id', 'plan_id', 'id', 'code'])
-    if (!idCandidate) return
-    const labelCandidate =
-      pickValue(item, ['name', 'planName', 'label', 'title', 'display_name']) ??
-      pickValue(item, ['product_id', 'plan_id', 'id', 'code'])
+    const detail = toPlanDetail(item)
+    if (!detail) return
+    details.push(detail)
+    options.push({ value: detail.id, label: buildPlanOptionLabel(detail), raw: item })
 
-    const priceCandidate = pickValue(item, ['price', 'hourly_price', 'monthly_price'])
-    const labelParts = [labelCandidate?.value ?? idCandidate.value]
-    if (priceCandidate?.value) {
-      labelParts.push(`¥${priceCandidate.value}`)
+    const osOptions: OptionItem[] = []
+    detail.osGroups.forEach((group) => {
+      group.variants.forEach((variant) => {
+        osOptions.push({
+          value: variant.id,
+          label: `${group.name} · ${variant.name}`,
+          raw: {
+            group: group.name,
+            logo: group.logo,
+            username: variant.username,
+            port: variant.port,
+          },
+        })
+      })
+    })
+    if (osOptions.length > 0) {
+      osByPlan[detail.id] = uniqueOptions(osOptions)
     }
-
-    options.push({ value: idCandidate.value, label: labelParts.join(' · '), raw: item })
   })
 
-  return uniqueOptions(options)
+  return {
+    options: uniqueOptions(options),
+    details,
+    osByPlan,
+  }
+}
+
+function looksLikePlanRecord(record: Record<string, unknown>) {
+  return (
+    'cpu' in record ||
+    'memory' in record ||
+    'disk' in record ||
+    'os' in record ||
+    'network_speed' in record
+  )
+}
+
+function extractPlanDetailsFromArray(array: unknown[]): PlanDetail[] {
+  const details: PlanDetail[] = []
+  array.forEach((item) => {
+    if (!isRecord(item)) return
+    if (!looksLikePlanRecord(item)) return
+    const detail = toPlanDetail(item)
+    if (detail) {
+      details.push(detail)
+    }
+  })
+  return details
+}
+
+function looksLikeInstanceRecord(record: Record<string, unknown>) {
+  return (
+    ('hostname' in record && 'status' in record) ||
+    ('ipv4' in record && 'plan' in record) ||
+    ('plan_id' in record && 'region' in record)
+  )
+}
+
+function toInstanceSummary(record: Record<string, unknown>): InstanceSummary | null {
+  const rawId = record.id ?? record.instance_id ?? record.uid
+  if (rawId === undefined || rawId === null) return null
+  const id = String(rawId)
+  const hostname = typeof record.hostname === 'string' ? record.hostname : undefined
+  const ipv4 = typeof record.ipv4 === 'string' ? record.ipv4 : undefined
+  const ipv6 = typeof record.ipv6 === 'string' ? record.ipv6 : undefined
+  const plan = typeof record.plan === 'string' ? record.plan : undefined
+  const status = typeof record.status === 'string' ? record.status : undefined
+  const region = typeof record.region === 'string' ? record.region : undefined
+  const expiresAt = typeof record.expiration_at === 'string' ? record.expiration_at : undefined
+
+  return {
+    id,
+    hostname,
+    ipv4,
+    ipv6,
+    plan,
+    status,
+    region,
+    expiresAt,
+  }
+}
+
+function extractInstanceSummaries(payload: unknown): InstanceSummary[] {
+  const items = unwrapList(payload)
+  const instances: InstanceSummary[] = []
+  items.forEach((item) => {
+    if (!isRecord(item)) return
+    if (!looksLikeInstanceRecord(item)) return
+    const detail = toInstanceSummary(item)
+    if (detail) instances.push(detail)
+  })
+  return instances
 }
 
 function deriveInstanceOptions(payload: unknown): OptionItem[] {
@@ -507,6 +771,101 @@ function deriveSshKeyOptions(payload: unknown): OptionItem[] {
 
 type ResponseCardProps = {
   entry: HistoryEntry
+}
+
+type PlanCardProps = {
+  plan: PlanDetail
+  onSelect?: (planId: string, osId?: string) => void
+  selected?: boolean
+  selectedOsId?: string
+  compact?: boolean
+}
+
+function PlanCard({ plan, onSelect, selected, selectedOsId, compact = false }: PlanCardProps) {
+  const specChips = useMemo(() => {
+    const chips: string[] = []
+    const cpuLabel = formatCpu(plan.cpu)
+    if (cpuLabel) chips.push(cpuLabel)
+    const memoryLabel = formatMemory(plan.memoryMb)
+    if (memoryLabel) chips.push(memoryLabel)
+    const diskLabel = formatDisk(plan.diskGb, plan.diskType)
+    if (diskLabel) chips.push(diskLabel)
+    if (plan.networkSpeed) chips.push(plan.networkSpeed)
+    if (plan.regionName) chips.push(plan.regionName)
+    if (plan.gpu && typeof plan.gpu === 'string') chips.push(plan.gpu)
+    return chips
+  }, [plan])
+
+  const osGroups = plan.osGroups
+  const hasAction = typeof onSelect === 'function' && !compact
+
+  return (
+    <div className={`plan-card ${compact ? 'plan-card--compact' : ''} ${selected ? 'plan-card--selected' : ''}`}>
+      <div className="plan-card__header">
+        <div>
+          <h4>{plan.name}</h4>
+          {plan.cpuName && !compact && <p className="plan-card__sub">{plan.cpuName}</p>}
+        </div>
+        {plan.stock !== undefined && plan.stock !== null && (
+          <span className="plan-card__badge">库存 {plan.stock}</span>
+        )}
+      </div>
+      {specChips.length > 0 && (
+        <div className="plan-card__specs">
+          {specChips.map((chip) => (
+            <span key={chip}>{chip}</span>
+          ))}
+        </div>
+      )}
+      {plan.description && !compact && plan.description.trim().length > 0 && (
+        <p className="plan-card__description">{plan.description}</p>
+      )}
+      {osGroups.length > 0 && (
+        <div className="plan-card__os">
+          {osGroups.map((group) => {
+            const primaryVariant = group.variants[0]
+            if (!primaryVariant) return null
+            const key = `${plan.id}-${group.id}`
+            const content = (
+              <>
+                {group.logo && <img src={group.logo} alt={group.name} loading="lazy" />}
+                <span>{group.name}</span>
+                {group.variants.length > 1 && (
+                  <span className="plan-card__os-more">+{group.variants.length - 1}</span>
+                )}
+              </>
+            )
+            if (hasAction) {
+              const isActive = selected && selectedOsId === primaryVariant.id
+              return (
+                <button
+                  type="button"
+                  key={key}
+                  className={`plan-card__os-button ${isActive ? 'plan-card__os-button--active' : ''}`}
+                  onClick={() => onSelect?.(plan.id, primaryVariant.id)}
+                  title={primaryVariant.name}
+                >
+                  {content}
+                </button>
+              )
+            }
+            return (
+              <span key={key} className="plan-card__os-chip" title={primaryVariant.name}>
+                {content}
+              </span>
+            )
+          })}
+        </div>
+      )}
+      {hasAction && (
+        <div className="plan-card__actions">
+          <button type="button" onClick={() => onSelect?.(plan.id)} className="plan-card__action">
+            使用此规格
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function ResponseCard({ entry }: ResponseCardProps) {
@@ -607,6 +966,87 @@ function ResponseCard({ entry }: ResponseCardProps) {
       {!isError && hasPreview && viewMode === 'preview' && (
         <div className="preview">
           {preview.blocks.map((block, index) => {
+            if (block.type === 'planGrid') {
+              return (
+                <section className="preview__block plan-preview" key={`plans-${index}`}>
+                  {block.title && <h3>{block.title}</h3>}
+                  <div className="plan-preview__grid">
+                    {block.plans.map((plan) => (
+                      <PlanCard key={plan.id} plan={plan} compact />
+                    ))}
+                  </div>
+                </section>
+              )
+            }
+
+            if (block.type === 'instanceList') {
+              return (
+                <section className="preview__block instance-preview" key={`instances-${index}`}>
+                  {block.title && <h3>{block.title}</h3>}
+                  <div className="instance-preview__list">
+                    {block.items.map((instance) => (
+                      <div className="instance-preview__item" key={instance.id}>
+                        {(() => {
+                          const statusLabel = instance.status
+                          const statusClass = statusLabel
+                            ? statusLabel.toLowerCase().replace(/[^a-z0-9-]/g, '-')
+                            : ''
+                          return (
+                            <div className="instance-preview__heading">
+                              <h4>{instance.hostname ?? `实例 ${instance.id}`}</h4>
+                              {statusLabel && (
+                                <span
+                                  className={`instance-preview__status instance-preview__status--${statusClass}`}
+                                >
+                                  {statusLabel}
+                                </span>
+                              )}
+                            </div>
+                          )
+                        })()}
+                        <dl>
+                          <div>
+                            <dt>ID</dt>
+                            <dd>{instance.id}</dd>
+                          </div>
+                          {instance.plan && (
+                            <div>
+                              <dt>Plan</dt>
+                              <dd>{instance.plan}</dd>
+                            </div>
+                          )}
+                          {instance.region && (
+                            <div>
+                              <dt>Region</dt>
+                              <dd>{instance.region}</dd>
+                            </div>
+                          )}
+                          {instance.ipv4 && (
+                            <div>
+                              <dt>IPv4</dt>
+                              <dd>{instance.ipv4}</dd>
+                            </div>
+                          )}
+                          {instance.ipv6 && (
+                            <div>
+                              <dt>IPv6</dt>
+                              <dd>{instance.ipv6}</dd>
+                            </div>
+                          )}
+                          {instance.expiresAt && (
+                            <div>
+                              <dt>Expires</dt>
+                              <dd>{instance.expiresAt}</dd>
+                            </div>
+                          )}
+                        </dl>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )
+            }
+
             if (block.type === 'keyValue') {
               return (
                 <section className="preview__block" key={`kv-${index}`}>
@@ -711,7 +1151,7 @@ function ResponseCard({ entry }: ResponseCardProps) {
 
 function App() {
   const [credentials, setCredentials] = useLocalStorage<Credentials>('alice.credentials', defaultCredentials)
-  const [catalog, setCatalog] = useLocalStorage<CatalogData>('alice.catalog', defaultCatalog)
+  const [storedCatalog, setCatalog] = useLocalStorage<CatalogData>('alice.catalog', defaultCatalog)
   const [prefetchState, setPrefetchState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
   const [prefetchError, setPrefetchError] = useState<string | null>(null)
   const [pendingOsPlan, setPendingOsPlan] = useState<string | null>(null)
@@ -724,6 +1164,50 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const historyCounter = useRef(0)
   const [history, setHistory] = useState<HistoryEntry[]>([])
+  const catalog = useMemo(() => {
+    const planDetails = storedCatalog.planDetails ?? defaultCatalog.planDetails
+    const osByPlan: Record<string, OptionItem[]> = {
+      ...defaultCatalog.osByPlan,
+      ...(storedCatalog.osByPlan ?? defaultCatalog.osByPlan),
+    }
+
+    planDetails.forEach((plan) => {
+      if (!plan) return
+      if (!osByPlan[plan.id] || osByPlan[plan.id].length === 0) {
+        const osOptions: OptionItem[] = []
+        plan.osGroups.forEach((group) => {
+          group.variants.forEach((variant) => {
+            osOptions.push({
+              value: variant.id,
+              label: `${group.name} · ${variant.name}`,
+              raw: {
+                group: group.name,
+                logo: group.logo,
+                username: variant.username,
+                port: variant.port,
+              },
+            })
+          })
+        })
+        if (osOptions.length > 0) {
+          osByPlan[plan.id] = uniqueOptions(osOptions)
+        }
+      }
+    })
+
+    return {
+      ...defaultCatalog,
+      ...storedCatalog,
+      plans: storedCatalog.plans ?? defaultCatalog.plans,
+      planDetails,
+      instances: storedCatalog.instances ?? defaultCatalog.instances,
+      sshKeys: storedCatalog.sshKeys ?? defaultCatalog.sshKeys,
+      osByPlan,
+      userInfo: storedCatalog.userInfo,
+      lastUpdated: storedCatalog.lastUpdated,
+    }
+  }, [storedCatalog])
+
   const sanitizedCredentials = useMemo<Credentials>(
     () => ({
       clientId: credentials.clientId.trim(),
@@ -767,6 +1251,29 @@ function App() {
 
   const handleFormValueChange = (key: string, value: string) => {
     setFormValues((prev) => ({ ...prev, [key]: value }))
+  }
+
+  const handlePlanQuickSelect = (planId: string, osId?: string) => {
+    const deployEndpoint = findEndpointById('evo-deploy') ?? endpoints[0]
+    setSelectedEndpointId(deployEndpoint.id)
+
+    setFormValues((prev) => {
+      const base = selectedEndpointId === deployEndpoint.id ? prev : getInitialValues(deployEndpoint)
+      const next: FormValues = { ...base }
+      next.product_id = planId
+      if ('plan_id' in base) {
+        next.plan_id = planId
+      }
+      if (osId) {
+        next.os_id = osId
+      } else if (!next.os_id && catalog.osByPlan[planId]?.length) {
+        next.os_id = catalog.osByPlan[planId][0]?.value ?? ''
+      }
+      if (!next.time) {
+        next.time = '24'
+      }
+      return next
+    })
   }
 
   const appendHistory = (entry: Omit<HistoryEntry, 'id' | 'createdAt'>) => {
@@ -826,7 +1333,7 @@ function App() {
       if (cancelled) return
 
       let successCount = 0
-      let planUpdate: OptionItem[] | undefined
+      let planCatalogUpdate: ReturnType<typeof extractPlanCatalog> | undefined
       let instanceUpdate: OptionItem[] | undefined
       let sshUpdate: OptionItem[] | undefined
       let userUpdate: unknown | undefined
@@ -841,9 +1348,9 @@ function App() {
         const { target, response } = result.value
 
         if (target.key === 'plans') {
-          const options = derivePlanOptions(response.data)
-          if (options.length > 0) {
-            planUpdate = options
+          const catalogData = extractPlanCatalog(response.data)
+          if (catalogData.details.length > 0 || catalogData.options.length > 0) {
+            planCatalogUpdate = catalogData
           }
           return
         }
@@ -869,17 +1376,23 @@ function App() {
         }
       })
 
-      const effectivePlans = planUpdate ?? catalog.plans
+      const effectivePlans = planCatalogUpdate?.options ?? catalog.plans
       const essentialsReady = effectivePlans.length > 0
 
       setCatalog((prev) => {
         const next: CatalogData = {
           ...prev,
           osByPlan: { ...prev.osByPlan },
+          planDetails: [...prev.planDetails],
         }
 
-        if (planUpdate) {
-          next.plans = planUpdate
+        if (planCatalogUpdate) {
+          next.plans = planCatalogUpdate.options
+          next.planDetails = planCatalogUpdate.details
+          next.osByPlan = {
+            ...next.osByPlan,
+            ...planCatalogUpdate.osByPlan,
+          }
         }
         if (instanceUpdate) {
           next.instances = instanceUpdate
@@ -1221,6 +1734,25 @@ function App() {
               </button>
             ))}
           </div>
+          {catalog.planDetails.length > 0 && (
+            <div className="quick-create" role="region" aria-label="快速创建">
+              <div className="quick-create__header">
+                <h3>快速创建</h3>
+                {prefetchState === 'loading' && <span className="quick-create__status">同步中…</span>}
+              </div>
+              <div className="quick-create__grid">
+                {catalog.planDetails.slice(0, 4).map((plan) => (
+                  <PlanCard
+                    key={plan.id}
+                    plan={plan}
+                    onSelect={handlePlanQuickSelect}
+                    selected={selectedEndpointId === 'evo-deploy' && formValues.product_id === plan.id}
+                    selectedOsId={selectedEndpointId === 'evo-deploy' ? formValues.os_id : undefined}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
           <div className="field-group">
             <label htmlFor="endpoint">Select endpoint</label>
             <select
