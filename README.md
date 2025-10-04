@@ -6,7 +6,7 @@ Tests
 使用方式
 
   - 开发时运行 npm run dev，前端会把请求发送到 http://localhost:5173/api/...，由 Vite 代理再转发到 Alice API，不会触发 CORS。
-  - 若部署到自己的域名，可在部署侧配置同样的反向代理，或在 .env 中设置 VITE_API_BASE_URL=https://app.alice.ws/cli/v1 等同源地址，确保生产环境也通过受控源发起请求。
+  - 若部署到自己的域名，可在部署侧配置同样的反向代理，或在 .env 中设置 VITE_API_BASE_URL=https://app.alice.ws/cli/v1 等同源地址，确保生产环境也通过受控源发起请求。 可以参考worker.js.example 配置自己的cf worker
 
 GitHub Pages 部署
 
