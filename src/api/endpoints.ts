@@ -132,6 +132,13 @@ export const endpoints: ApiEndpoint[] = [
         required: true,
       },
       {
+        key: 'bootScript',
+        label: 'Boot Script',
+        helperText: 'Optional script to run after rebuild. Encoded as Base64 before submission.',
+        multiline: true,
+        transform: 'base64',
+      },
+      {
         key: 'sshKey',
         label: 'SSH Key ID',
         helperText: 'Optional SSH key to inject during rebuild.',
