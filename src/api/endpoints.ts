@@ -11,6 +11,8 @@ export type ApiField = {
   defaultValue?: string
   placeholder?: string
   options?: { label: string; value: string }[]
+  multiline?: boolean
+  transform?: 'base64'
 }
 
 export type ApiEndpoint = {
@@ -55,6 +57,13 @@ export const endpoints: ApiEndpoint[] = [
         helperText: 'Number of hours the instance should run.',
         defaultValue: '24',
         required: true,
+      },
+      {
+        key: 'bootScript',
+        label: 'Boot Script',
+        helperText: 'Optional script to run on first boot. Encoded as Base64 before submission.',
+        multiline: true,
+        transform: 'base64',
       },
       {
         key: 'sshKey',

@@ -467,8 +467,20 @@
   transition: box-shadow 0.2s ease, border 0.2s ease;
 }
 
+.field-group__textarea {
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.7);
+  background: rgba(255, 255, 255, 0.8);
+  font-size: 0.95rem;
+  transition: box-shadow 0.2s ease, border 0.2s ease;
+  min-height: 140px;
+  resize: vertical;
+}
+
 .field-group input:focus,
-.field-group select:focus {
+.field-group select:focus,
+.field-group__textarea:focus {
   outline: none;
   border-color: #6366f1;
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
@@ -478,6 +490,84 @@
   margin: 0;
   font-size: 0.85rem;
   color: #64748b;
+}
+
+.field-group__hint--error {
+  color: #ef4444;
+}
+
+.transform-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.35rem;
+}
+
+.transform-controls__mode {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: #475569;
+}
+
+.transform-controls__mode input {
+  accent-color: #6366f1;
+}
+
+.ghost-button--inline {
+  padding: 0.4rem 0.9rem;
+}
+
+.transform-controls__status {
+  font-size: 0.85rem;
+  color: #10b981;
+}
+
+.transform-controls__status--error {
+  color: #ef4444;
+}
+
+.transform-preview {
+  margin-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  background: rgba(248, 250, 252, 0.7);
+  padding: 0.65rem 0.75rem;
+}
+
+.transform-preview__meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #475569;
+}
+
+.transform-preview__length {
+  font-weight: 400;
+  color: #64748b;
+}
+
+.transform-preview__textarea {
+  width: 100%;
+  resize: vertical;
+  border: 0;
+  background: transparent;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: #0f172a;
+  padding: 0;
+  outline: none;
+}
+
+.transform-preview__textarea:focus {
+  outline: none;
 }
 
 .option-grid {

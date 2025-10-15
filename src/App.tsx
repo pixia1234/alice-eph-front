@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { API_BASE_URL, endpoints, type ApiEndpoint } from './api/endpoints'
 import { callEndpoint, type ApiCallPayload, type ApiCallResult, type Credentials } from './api/client'
@@ -6,6 +6,8 @@ import { useLocalStorage } from './hooks/useLocalStorage'
 
 /** -------------------- 简化的类型 -------------------- */
 type FormValues = Record<string, string>
+type TransformMode = 'auto' | 'raw'
+type TransformModes = Record<string, TransformMode>
 
 type HistoryEntry = {
   id: number
@@ -45,6 +47,24 @@ const defaultEndpoint = (() => {
   return endpoints[0]
 })()
 
+const buildDefaultFormValues = (endpoint?: ApiEndpoint): FormValues => {
+  const defaults: FormValues = {}
+  endpoint?.bodyFields?.forEach(field => {
+    defaults[field.key] = field.defaultValue ?? field.options?.[0]?.value ?? ''
+  })
+  return defaults
+}
+
+const buildDefaultTransformModes = (endpoint?: ApiEndpoint): TransformModes => {
+  const modes: TransformModes = {}
+  endpoint?.bodyFields?.forEach(field => {
+    if (field.transform) {
+      modes[field.key] = 'auto'
+    }
+  })
+  return modes
+}
+
 /** -------------------- 小工具函数（保留最小集合） -------------------- */
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -63,6 +83,21 @@ const unwrapList = (payload: unknown): unknown[] => {
 const uniqueOptions = (options: OptionItem[]) => {
   const seen = new Set<string>()
   return options.filter(o => (seen.has(o.value) ? false : (seen.add(o.value), true)))
+}
+
+const encodeToBase64 = (value: string): string => {
+  if (!value) return ''
+  if (typeof TextEncoder === 'function' && typeof btoa === 'function') {
+    const bytes = new TextEncoder().encode(value)
+    let binary = ''
+    for (const byte of bytes) binary += String.fromCharCode(byte)
+    return btoa(binary)
+  }
+  const globalBuffer = (globalThis as typeof globalThis & { Buffer?: { from: (input: string, encoding: string) => { toString: (encoding: string) => string } } }).Buffer
+  if (globalBuffer) {
+    return globalBuffer.from(value, 'utf-8').toString('base64')
+  }
+  throw new Error('Base64 encoding is not supported in this environment.')
 }
 
 const pick = (rec: Record<string, unknown>, keys: string[]): string | undefined => {
@@ -264,21 +299,29 @@ function App() {
     : ''
   const [formValues, setFormValues] = useState<FormValues>(() => {
     const ep = initialEndpoint ?? endpoints[0]
-    const o: FormValues = {}
-    ep?.bodyFields?.forEach(f => o[f.key] = f.defaultValue ?? f.options?.[0]?.value ?? '')
-    return o
+    return buildDefaultFormValues(ep)
   })
+  const [transformModes, setTransformModes] = useState<TransformModes>(() => {
+    const ep = initialEndpoint ?? endpoints[0]
+    return buildDefaultTransformModes(ep)
+  })
+  const [transformCopyStatus, setTransformCopyStatus] = useState<{ key: string; status: 'copied' | 'error' } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const counter = useRef(0)
+
+  useEffect(() => {
+    if (!transformCopyStatus) return
+    const timeout = setTimeout(() => setTransformCopyStatus(null), 2000)
+    return () => clearTimeout(timeout)
+  }, [transformCopyStatus])
 
   /** 切换端点时重置该端点的默认表单值 */
   const handleEndpointChange = (id: string) => {
     setSelectedEndpointId(id)
     const ep = endpoints.find(e => e.id === id) ?? initialEndpoint ?? endpoints[0]
-    const o: FormValues = {}
-    ep.bodyFields?.forEach(f => (o[f.key] = f.defaultValue ?? f.options?.[0]?.value ?? ''))
-    setFormValues(o)
+    setFormValues(buildDefaultFormValues(ep))
+    setTransformModes(buildDefaultTransformModes(ep))
   }
 
   const handleFormChange = (k: string, v: string) => setFormValues(p => ({ ...p, [k]: v }))
@@ -500,10 +543,30 @@ function App() {
     }
 
     const payload: ApiCallPayload = {}
-    selectedEndpoint.bodyFields?.forEach(f => {
-      const v = formValues[f.key]
-      if (v != null && v !== '') payload[f.key] = v
-    })
+    try {
+      selectedEndpoint.bodyFields?.forEach(field => {
+        const rawValue = formValues[field.key]
+        if (rawValue == null || rawValue === '') return
+        const mode = transformModes[field.key] ?? (field.transform ? 'auto' : 'raw')
+        let finalValue = rawValue
+        if (field.transform === 'base64' && mode === 'auto') {
+          finalValue = encodeToBase64(rawValue)
+        }
+        if (finalValue !== '') {
+          payload[field.key] = finalValue
+        }
+      })
+    } catch (error: any) {
+      appendHistory({
+        kind: 'error',
+        endpointId: selectedEndpoint.id,
+        endpointName: selectedEndpoint.name,
+        endpointMethod: selectedEndpoint.method,
+        endpointPath: selectedEndpoint.path,
+        error: { message: error?.message ?? '无法编码 bootScript。' }
+      })
+      return
+    }
 
     setIsLoading(true)
     const snapshot = selectedEndpoint
@@ -679,6 +742,47 @@ function App() {
                     field.key === 'os' ||
                     /\bos\b/.test(normalizedLabel) ||
                     normalizedLabel.includes('os id')
+                  const isTransformField = field.transform === 'base64'
+                  const transformMode = transformModes[field.key] ?? (isTransformField ? 'auto' : 'raw')
+                  let encodedPreview = ''
+                  let encodePreviewError: string | null = null
+                  if (isTransformField && transformMode === 'auto') {
+                    if (currentValue) {
+                      try {
+                        encodedPreview = encodeToBase64(currentValue)
+                      } catch (error: any) {
+                        encodePreviewError = error?.message ?? '无法生成 Base64 预览。'
+                      }
+                    } else {
+                      encodedPreview = ''
+                    }
+                  }
+                  const canCopyEncoded =
+                    typeof navigator !== 'undefined' &&
+                    !!navigator.clipboard &&
+                    typeof navigator.clipboard.writeText === 'function'
+                  const copyStatus = transformCopyStatus?.key === field.key ? transformCopyStatus.status : null
+
+                  const renderTextInput = () =>
+                    field.multiline ? (
+                      <textarea
+                        id={`f-${field.key}`}
+                        value={currentValue}
+                        onChange={(e) => handleFormChange(field.key, e.target.value)}
+                        placeholder={field.placeholder}
+                        required={field.required}
+                        rows={6}
+                        className="field-group__textarea"
+                      />
+                    ) : (
+                      <input
+                        id={`f-${field.key}`}
+                        value={currentValue}
+                        onChange={(e) => handleFormChange(field.key, e.target.value)}
+                        placeholder={field.placeholder}
+                        required={field.required}
+                      />
+                    )
 
                   const renderOsCards = () => {
                     if (!hasOptions) {
@@ -731,6 +835,125 @@ function App() {
                     })
                   }
 
+                  let control: ReactNode
+                  if (isOsField) {
+                    control = (
+                      <div
+                        id={`f-${field.key}`}
+                        className="option-grid option-grid--os"
+                        role="radiogroup"
+                        aria-required={field.required}
+                        aria-labelledby={labelId}
+                      >
+                        {renderOsCards()}
+                      </div>
+                    )
+                  } else if (hasOptions) {
+                    control = (
+                      <div
+                        id={`f-${field.key}`}
+                        className="option-grid"
+                        role="radiogroup"
+                        aria-required={field.required}
+                        aria-label={labelText}
+                        aria-labelledby={labelId}
+                      >
+                        {optionList.map((option) => {
+                          const isSelected = currentValue === option.value
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              role="radio"
+                              aria-checked={isSelected}
+                              className={`option-card ${isSelected ? 'option-card--active' : ''}`}
+                              onClick={() => handleFormChange(field.key, option.value)}
+                              title={option.label !== option.value ? `${option.label} (${option.value})` : option.label}
+                            >
+                              <span className="option-card__label">{option.label}</span>
+                              {option.value !== option.label && (
+                                <span className="option-card__value">{option.value}</span>
+                              )}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )
+                  } else {
+                    control = (
+                      <>
+                        {renderTextInput()}
+                        {isTransformField && (
+                          <div className="transform-controls" role="group" aria-label="Base64 options">
+                            <label className="transform-controls__mode">
+                              <input
+                                type="checkbox"
+                                checked={transformMode === 'auto'}
+                                onChange={() => {
+                                  setTransformModes(prev => ({
+                                    ...prev,
+                                    [field.key]: transformMode === 'auto' ? 'raw' : 'auto',
+                                  }))
+                                }}
+                              />
+                              自动 Base64 编码
+                            </label>
+                            <button
+                              type="button"
+                              className="ghost-button ghost-button--inline"
+                              onClick={async () => {
+                                if (
+                                  !encodedPreview ||
+                                  !canCopyEncoded ||
+                                  typeof navigator === 'undefined' ||
+                                  !navigator.clipboard ||
+                                  typeof navigator.clipboard.writeText !== 'function'
+                                ) {
+                                  return
+                                }
+                                try {
+                                  await navigator.clipboard.writeText(encodedPreview)
+                                  setTransformCopyStatus({ key: field.key, status: 'copied' })
+                                } catch {
+                                  setTransformCopyStatus({ key: field.key, status: 'error' })
+                                }
+                              }}
+                              disabled={!encodedPreview || !canCopyEncoded}
+                              title={canCopyEncoded ? '复制 Base64 编码后的脚本' : '当前环境不支持快速复制'}
+                            >
+                              Copy Base64
+                            </button>
+                            {copyStatus && (
+                              <span className={`transform-controls__status ${copyStatus === 'error' ? 'transform-controls__status--error' : ''}`}>
+                                {copyStatus === 'copied' ? '已复制' : '复制失败'}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {isTransformField && transformMode === 'auto' && (
+                          encodePreviewError ? (
+                            <p className="field-group__hint field-group__hint--error">{encodePreviewError}</p>
+                          ) : (
+                            <div className="transform-preview">
+                              <div className="transform-preview__meta">
+                                <span>Base64 预览</span>
+                                {encodedPreview && (
+                                  <span className="transform-preview__length">{encodedPreview.length} chars</span>
+                                )}
+                              </div>
+                              <textarea
+                                readOnly
+                                value={encodedPreview}
+                                className="transform-preview__textarea"
+                                rows={encodedPreview ? Math.min(8, Math.max(3, Math.ceil(encodedPreview.length / 80))) : 3}
+                              />
+                            </div>
+                          )
+                        )}
+                      </>
+                    )
+                  }
+
                   return (
                     <div className="field-group" key={field.key}>
                       <label
@@ -739,51 +962,7 @@ function App() {
                       >
                         {field.label}{field.required && <span className="required">*</span>}
                       </label>
-                      {isOsField ? (
-                        <div
-                          id={`f-${field.key}`}
-                          className="option-grid option-grid--os"
-                          role="radiogroup"
-                          aria-required={field.required}
-                          aria-labelledby={labelId}
-                        >
-                          {renderOsCards()}
-                        </div>
-                      ) : hasOptions ? (
-                        <div
-                          id={`f-${field.key}`}
-                          className="option-grid"
-                          role="radiogroup"
-                          aria-required={field.required}
-                          aria-label={labelText}
-                          aria-labelledby={labelId}
-                        >
-                          {optionList.map((option) => {
-                            const isSelected = currentValue === option.value
-                            return (
-                              <button
-                                key={option.value}
-                                type="button"
-                                role="radio"
-                                aria-checked={isSelected}
-                                className={`option-card ${isSelected ? 'option-card--active' : ''}`}
-                                onClick={() => handleFormChange(field.key, option.value)}
-                                title={option.label !== option.value ? `${option.label} (${option.value})` : option.label}
-                              >
-                                <span className="option-card__label">{option.label}</span>
-                                {option.value !== option.label && (
-                                  <span className="option-card__value">{option.value}</span>
-                                )}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      ) : (
-                        <input id={`f-${field.key}`} value={currentValue}
-                          onChange={(e) => handleFormChange(field.key, e.target.value)}
-                          placeholder={field.placeholder} required={field.required}
-                        />
-                      )}
+                      {control}
                       {field.helperText && <p className="field-group__hint">{field.helperText}</p>}
                     </div>
                   )
