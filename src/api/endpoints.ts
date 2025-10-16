@@ -222,4 +222,52 @@ export const endpoints: ApiEndpoint[] = [
     path: '/User/Info',
     description: 'Fetch basic account profile metadata.',
   },
+  {
+    id: 'command-execute-async',
+    name: 'Execute Command (Async)',
+    method: 'POST',
+    path: '/Command/executeAsync',
+    description: 'Run a shell command asynchronously on the selected instance.',
+    bodyFields: [
+      {
+        key: 'server_id',
+        label: 'Instance ID',
+        helperText: 'Target instance identifier.',
+        required: true,
+      },
+      {
+        key: 'command',
+        label: 'Command',
+        helperText: 'Shell command to execute remotely. Encoded as Base64 when auto mode is enabled.',
+        required: true,
+        multiline: true,
+        transform: 'base64',
+      },
+    ],
+  },
+  {
+    id: 'command-get-result',
+    name: 'Get Command Result',
+    method: 'POST',
+    path: '/Command/getResult',
+    description: 'Fetch the execution result for a previously queued command.',
+    bodyFields: [
+      {
+        key: 'command_uid',
+        label: 'Command UID',
+        helperText: 'Use the UID returned by executeAsync.',
+        required: true,
+      },
+      {
+        key: 'output_base64',
+        label: 'Base64 Output',
+        helperText: 'Return output encoded in Base64 when set to true.',
+        defaultValue: 'false',
+        options: [
+          { label: 'false', value: 'false' },
+          { label: 'true', value: 'true' },
+        ],
+      },
+    ],
+  },
 ]
