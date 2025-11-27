@@ -6,6 +6,7 @@ export const API_BASE_URL = (ENV_API_BASE ? ENV_API_BASE : DEFAULT_API_BASE).rep
 export type ApiField = {
   key: string
   label: string
+  location?: 'body' | 'path'
   helperText?: string
   required?: boolean
   defaultValue?: string
@@ -18,7 +19,7 @@ export type ApiField = {
 export type ApiEndpoint = {
   id: string
   name: string
-  method: 'GET' | 'POST'
+  method: 'GET' | 'POST' | 'DELETE'
   path: string
   description?: string
   bodyFields?: ApiField[]
@@ -29,14 +30,14 @@ export const endpoints: ApiEndpoint[] = [
     id: 'evo-instance-list',
     name: 'EVO Instance List',
     method: 'GET',
-    path: '/Evo/Instance',
+    path: '/evo/instances',
     description: 'Retrieve all EVO instances associated with the authenticated user.',
   },
   {
     id: 'evo-deploy',
     name: 'Deploy EVO Instance',
     method: 'POST',
-    path: '/Evo/Deploy',
+    path: '/evo/instances/deploy',
     description: 'Provision a new EVO instance using a plan, OS, and duration.',
     bodyFields: [
       {
@@ -59,24 +60,24 @@ export const endpoints: ApiEndpoint[] = [
         required: true,
       },
       {
-        key: 'bootScript',
+        key: 'ssh_key_id',
+        label: 'SSH Key ID',
+        helperText: 'Optional SSH key ID associated with the account.',
+      },
+      {
+        key: 'boot_script',
         label: 'Boot Script',
         helperText: 'Optional script to run on first boot. Encoded as Base64 before submission.',
         multiline: true,
         transform: 'base64',
-      },
-      {
-        key: 'sshKey',
-        label: 'SSH Key ID',
-        helperText: 'Optional SSH key ID associated with the account.',
       },
     ],
   },
   {
     id: 'evo-destroy',
     name: 'Destroy EVO Instance',
-    method: 'POST',
-    path: '/Evo/Destroy',
+    method: 'DELETE',
+    path: '/evo/instances/:id',
     description: 'Terminate a provisioned instance by its numeric ID.',
     bodyFields: [
       {
@@ -84,6 +85,7 @@ export const endpoints: ApiEndpoint[] = [
         label: 'Instance ID',
         helperText: 'Instance identifier as returned by the instance list endpoint.',
         required: true,
+        location: 'path',
       },
     ],
   },
@@ -91,24 +93,26 @@ export const endpoints: ApiEndpoint[] = [
     id: 'evo-power',
     name: 'EVO Instance Power',
     method: 'POST',
-    path: '/Evo/Power',
+    path: '/evo/instances/:id/power',
     description: 'Control the power state for an instance.',
     bodyFields: [
       {
         key: 'id',
         label: 'Instance ID',
         required: true,
+        location: 'path',
       },
       {
         key: 'action',
         label: 'Action',
-        helperText: 'Accepts boot, reboot, or shutdown.',
-        defaultValue: 'reboot',
+        helperText: 'Accepts boot, restart, shutdown, or poweroff.',
+        defaultValue: 'restart',
         required: true,
         options: [
-          { label: 'Reboot', value: 'reboot' },
+          { label: 'Restart', value: 'restart' },
           { label: 'Boot', value: 'boot' },
           { label: 'Shutdown', value: 'shutdown' },
+          { label: 'Power off', value: 'poweroff' },
         ],
       },
     ],
@@ -117,31 +121,32 @@ export const endpoints: ApiEndpoint[] = [
     id: 'evo-rebuild',
     name: 'Rebuild EVO Instance',
     method: 'POST',
-    path: '/Evo/Rebuild',
+    path: '/evo/instances/:id/rebuild',
     description: 'Reinstall the operating system for an instance.',
     bodyFields: [
       {
         key: 'id',
         label: 'Instance ID',
         required: true,
+        location: 'path',
       },
       {
-        key: 'os',
+        key: 'os_id',
         label: 'OS ID',
         helperText: 'Target operating system identifier.',
         required: true,
       },
       {
-        key: 'bootScript',
+        key: 'ssh_key_id',
+        label: 'SSH Key ID',
+        helperText: 'Optional SSH key to inject during rebuild.',
+      },
+      {
+        key: 'boot_script',
         label: 'Boot Script',
         helperText: 'Optional script to run after rebuild. Encoded as Base64 before submission.',
         multiline: true,
         transform: 'base64',
-      },
-      {
-        key: 'sshKey',
-        label: 'SSH Key ID',
-        helperText: 'Optional SSH key to inject during rebuild.',
       },
     ],
   },
@@ -149,20 +154,21 @@ export const endpoints: ApiEndpoint[] = [
     id: 'evo-plan-list',
     name: 'EVO Plan List',
     method: 'GET',
-    path: '/Evo/Plan',
+    path: '/evo/plans',
     description: 'List available EVO compute plans.',
   },
   {
     id: 'evo-plan-os',
-    name: 'EVO getOSByPlan',
-    method: 'POST',
-    path: '/Evo/getOSByPlan',
+    name: 'EVO Plan OS Images',
+    method: 'GET',
+    path: '/evo/plans/:id/os-images',
     description: 'Fetch operating systems supported by a specific plan.',
     bodyFields: [
       {
-        key: 'plan_id',
+        key: 'id',
         label: 'Plan ID',
         required: true,
+        location: 'path',
       },
     ],
   },
@@ -170,13 +176,14 @@ export const endpoints: ApiEndpoint[] = [
     id: 'evo-renewal',
     name: 'EVO Instance Renewal',
     method: 'POST',
-    path: '/Evo/Renewal',
+    path: '/evo/instances/:id/renewals',
     description: 'Extend the runtime for an existing instance.',
     bodyFields: [
       {
         key: 'id',
         label: 'Instance ID',
         required: true,
+        location: 'path',
       },
       {
         key: 'time',
@@ -190,14 +197,15 @@ export const endpoints: ApiEndpoint[] = [
   {
     id: 'evo-instance-state',
     name: 'EVO Instance State',
-    method: 'POST',
-    path: '/Evo/State',
+    method: 'GET',
+    path: '/evo/instances/:id/state',
     description: 'Request a live status update for an instance.',
     bodyFields: [
       {
         key: 'id',
         label: 'Instance ID',
         required: true,
+        location: 'path',
       },
     ],
   },
@@ -205,35 +213,36 @@ export const endpoints: ApiEndpoint[] = [
     id: 'user-sshkeys',
     name: 'User SSH Keys',
     method: 'GET',
-    path: '/User/SSHKey',
+    path: '/account/ssh-keys',
     description: 'Retrieve SSH keys stored for the authenticated user.',
   },
   {
     id: 'user-evo-permissions',
     name: 'User EVO Permissions',
     method: 'GET',
-    path: '/User/EVOPermissions',
+    path: '/evo/permissions',
     description: 'Inspect the current user permissions for EVO actions.',
   },
   {
     id: 'user-info',
     name: 'User Info',
     method: 'GET',
-    path: '/User/Info',
+    path: '/account/profile',
     description: 'Fetch basic account profile metadata.',
   },
   {
     id: 'command-execute-async',
     name: 'Execute Command (Async)',
     method: 'POST',
-    path: '/Command/executeAsync',
+    path: '/evo/instances/:id/exec',
     description: 'Run a shell command asynchronously on the selected instance.',
     bodyFields: [
       {
-        key: 'server_id',
+        key: 'id',
         label: 'Instance ID',
         helperText: 'Target instance identifier.',
         required: true,
+        location: 'path',
       },
       {
         key: 'command',
@@ -248,25 +257,23 @@ export const endpoints: ApiEndpoint[] = [
   {
     id: 'command-get-result',
     name: 'Get Command Result',
-    method: 'POST',
-    path: '/Command/getResult',
+    method: 'GET',
+    path: '/evo/instances/:id/exec/:uid',
     description: 'Fetch the execution result for a previously queued command.',
     bodyFields: [
       {
-        key: 'command_uid',
-        label: 'Command UID',
-        helperText: 'Use the UID returned by executeAsync.',
+        key: 'id',
+        label: 'Instance ID',
+        helperText: 'Instance identifier.',
         required: true,
+        location: 'path',
       },
       {
-        key: 'output_base64',
-        label: 'Base64 Output',
-        helperText: 'Return output encoded in Base64 when set to true.',
-        defaultValue: 'false',
-        options: [
-          { label: 'false', value: 'false' },
-          { label: 'true', value: 'true' },
-        ],
+        key: 'uid',
+        label: 'Command UID',
+        helperText: 'Use the UID returned by Execute Command.',
+        required: true,
+        location: 'path',
       },
     ],
   },

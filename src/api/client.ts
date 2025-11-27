@@ -29,6 +29,33 @@ function buildAuthorization(credentials: Credentials) {
   return `Bearer ${credentials.clientId}:${credentials.clientSecret}`
 }
 
+function applyPathParams(endpoint: ApiEndpoint, payload: ApiCallPayload) {
+  let path = endpoint.path
+  const body: Record<string, string> = {}
+
+  endpoint.bodyFields?.forEach((field) => {
+    const rawValue = payload[field.key]
+    if (field.location === 'path') {
+      if (rawValue !== undefined && rawValue !== null && rawValue !== '') {
+        const encoded = encodeURIComponent(String(rawValue))
+        path = path.replace(new RegExp(`:${field.key}\\b`, 'g'), encoded)
+      }
+      return
+    }
+    if (rawValue !== undefined && rawValue !== null && rawValue !== '') {
+      body[field.key] = rawValue
+    }
+  })
+
+  const unmatched = path.match(/:([A-Za-z0-9_]+)/g) ?? []
+  const missingParams = unmatched.map((token) => token.slice(1))
+  if (missingParams.length) {
+    throw new Error(`Missing path params: ${missingParams.join(', ')}`)
+  }
+
+  return { path, body }
+}
+
 function toRecord(headers: Headers) {
   const record: Record<string, string> = {}
   headers.forEach((value, key) => {
@@ -69,7 +96,8 @@ async function callDirect(
   credentials: Credentials,
   payload: ApiCallPayload,
 ): Promise<ApiCallResult> {
-  const url = `${API_BASE_URL}${endpoint.path}`
+  const { path, body } = applyPathParams(endpoint, payload)
+  const url = `${API_BASE_URL}${path}`
   const requestInit: RequestInit = {
     method: endpoint.method,
     headers: {
@@ -77,15 +105,10 @@ async function callDirect(
     },
   }
 
-  if (endpoint.method !== 'GET') {
-    const formData = new FormData()
-    endpoint.bodyFields?.forEach((field) => {
-      const value = payload[field.key]
-      if (value !== undefined && value !== null) {
-        formData.append(field.key, value)
-      }
-    })
-    requestInit.body = formData
+  const shouldAttachBody = endpoint.method === 'POST' || (endpoint.method !== 'GET' && Object.keys(body).length > 0)
+  if (shouldAttachBody) {
+    requestInit.headers = { ...requestInit.headers, 'Content-Type': 'application/json' }
+    requestInit.body = JSON.stringify(body)
   }
 
   const start = performance.now()
@@ -117,7 +140,7 @@ async function callDirect(
 
 type ProxyRequest = {
   url: string
-  method: 'GET' | 'POST'
+  method: 'GET' | 'POST' | 'DELETE'
   headers: Record<string, string>
   body?: Record<string, string>
 }
@@ -128,7 +151,8 @@ async function callViaProxy(
   payload: ApiCallPayload,
   proxyUrl: string,
 ): Promise<ApiCallResult> {
-  const url = `${API_BASE_URL}${endpoint.path}`
+  const { path, body } = applyPathParams(endpoint, payload)
+  const url = `${API_BASE_URL}${path}`
   const proxyRequest: ProxyRequest = {
     url,
     method: endpoint.method,
@@ -137,14 +161,8 @@ async function callViaProxy(
     },
   }
 
-  if (endpoint.method !== 'GET') {
-    const body: Record<string, string> = {}
-    endpoint.bodyFields?.forEach((field) => {
-      const value = payload[field.key]
-      if (value !== undefined && value !== null && value !== '') {
-        body[field.key] = value
-      }
-    })
+  const shouldAttachBody = endpoint.method === 'POST' || (endpoint.method !== 'GET' && Object.keys(body).length > 0)
+  if (shouldAttachBody) {
     proxyRequest.body = body
   }
 

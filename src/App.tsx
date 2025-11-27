@@ -469,7 +469,7 @@ function App() {
 
     ;(async () => {
       try {
-        const res = await callEndpoint(osEp, sanitizedCredentials, { plan_id: planIdForOs })
+        const res = await callEndpoint(osEp, sanitizedCredentials, { id: planIdForOs })
         if (cancelled) return
         const osOpts = deriveOsOptions(res.data)
         setCatalog(prev => ({ ...prev, osByPlan: { ...prev.osByPlan, [planIdForOs]: osOpts } }))
@@ -563,7 +563,7 @@ function App() {
         endpointName: selectedEndpoint.name,
         endpointMethod: selectedEndpoint.method,
         endpointPath: selectedEndpoint.path,
-        error: { message: error?.message ?? '无法编码 bootScript。' }
+        error: { message: error?.message ?? '无法编码脚本。' }
       })
       return
     }
