@@ -110,6 +110,17 @@ const pick = (rec: Record<string, unknown>, keys: string[]): string | undefined 
   return undefined
 }
 
+const coerceJsonValue = (value: string): string | number | boolean => {
+  const trimmed = value.trim()
+  if (trimmed === 'true') return true
+  if (trimmed === 'false') return false
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+    const num = Number(trimmed)
+    if (Number.isFinite(num)) return num
+  }
+  return value
+}
+
 const buildGenericOptions = (payload: unknown, idKeys: string[], labelKeys: string[]): OptionItem[] => {
   const items = unwrapList(payload)
   const options: OptionItem[] = []
@@ -559,7 +570,7 @@ function App() {
           finalValue = encodeToBase64(rawValue)
         }
         if (finalValue !== '') {
-          payload[field.key] = finalValue
+          payload[field.key] = coerceJsonValue(finalValue)
         }
       })
     } catch (error: any) {

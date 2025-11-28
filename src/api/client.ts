@@ -8,7 +8,7 @@ export type Credentials = {
   clientSecret: string
 }
 
-export type ApiCallPayload = Record<string, string>
+export type ApiCallPayload = Record<string, string | number | boolean>
 
 export type ApiCallResult = {
   ok: boolean
@@ -31,7 +31,7 @@ function buildAuthorization(credentials: Credentials) {
 
 function applyPathParams(endpoint: ApiEndpoint, payload: ApiCallPayload) {
   let path = endpoint.path
-  const body: Record<string, string> = {}
+  const body: Record<string, string | number | boolean> = {}
 
   endpoint.bodyFields?.forEach((field) => {
     const rawValue = payload[field.key]
@@ -142,7 +142,7 @@ type ProxyRequest = {
   url: string
   method: 'GET' | 'POST' | 'DELETE'
   headers: Record<string, string>
-  body?: Record<string, string>
+  body?: Record<string, string | number | boolean>
 }
 
 async function callViaProxy(
