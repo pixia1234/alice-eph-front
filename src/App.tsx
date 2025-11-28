@@ -462,27 +462,32 @@ function App() {
 
   useEffect(() => {
     if (!hasCredentials || !planIdForOs) return
-    if (catalog.osByPlan[planIdForOs]) return  // 已经有缓存（来自 plans 预取），直接用
+    const cached = catalog.osByPlan[planIdForOs]
+    if (cached && cached.length > 0) return  // 已经有缓存，直接用
+    const status = osFetchStatus[planIdForOs]
+    if (status === 'loading' || status === 'success') return
 
     const osEp = findEndpointById('evo-plan-os')
     if (!osEp) return
     let cancelled = false
 
+    setOsFetchStatus(prev => ({ ...prev, [planIdForOs]: 'loading' }))
     ;(async () => {
       try {
         const res = await callEndpoint(osEp, sanitizedCredentials, { id: planIdForOs })
         if (cancelled) return
         const osOpts = deriveOsOptions(res.data)
         setCatalog(prev => ({ ...prev, osByPlan: { ...prev.osByPlan, [planIdForOs]: osOpts } }))
+        setOsFetchStatus(prev => ({ ...prev, [planIdForOs]: 'success' }))
       } catch {
         if (!cancelled) {
-          setCatalog(prev => ({ ...prev, osByPlan: { ...prev.osByPlan, [planIdForOs]: [] } }))
+          setOsFetchStatus(prev => ({ ...prev, [planIdForOs]: 'error' }))
         }
       }
     })()
 
     return () => { cancelled = true }
-  }, [catalog.osByPlan, hasCredentials, planIdForOs, sanitizedCredentials, setCatalog])
+  }, [catalog.osByPlan, hasCredentials, osFetchStatus, planIdForOs, sanitizedCredentials, setCatalog])
 
   /** 动态选项：仅保留最常用映射（Plan/Instance/SSH/OS） */
   const dynamicOptions = useMemo<Record<string, OptionItem[]>>(() => {
@@ -645,7 +650,7 @@ function App() {
             >
               Refresh data
             </button>
-            <button className="ghost-button" onClick={() => { setCredentials(defaultCredentials); setCatalog(defaultCatalog); setPrefetchState('idle') }}>
+            <button className="ghost-button" onClick={() => { setCredentials(defaultCredentials); setCatalog(defaultCatalog); setPrefetchState('idle'); setOsFetchStatus({}) }}>
               Clear
             </button>
           </div>
@@ -788,6 +793,10 @@ function App() {
 
                   const renderOsCards = () => {
                     if (!hasOptions) {
+                      const osStatus = osFetchStatus[planIdForOs ?? '']
+                      const errorHint = osStatus === 'error'
+                        ? 'OS 列表加载失败，请检查凭证或点击 Refresh data 后重试。'
+                        : null
                       const emptyHint = selectedEndpoint.id === 'evo-deploy'
                         ? '请选择 Plan 以加载可用的 OS 列表。'
                         : selectedEndpoint.id === 'evo-rebuild'
@@ -798,7 +807,7 @@ function App() {
                           <span className="option-card__icon option-card__icon--placeholder" aria-hidden="true">?</span>
                           <span className="option-card__content">
                             <span className="option-card__label">等待操作系统列表</span>
-                            <span className="option-card__meta">{emptyHint}</span>
+                            <span className="option-card__meta">{errorHint ?? emptyHint}</span>
                           </span>
                         </div>
                       )
