@@ -449,11 +449,12 @@ function App() {
         })
 
         // 如果计划列表没有带 OS 详情，这里预取一次以免后续界面卡在等待状态
-        if (Array.isArray(planOptionsUpdate) && planOptionsUpdate.length > 0) {
+        const planOptionsList = planOptionsUpdate ?? []
+        if (planOptionsList.length > 0) {
           const osEp = findEndpointById('evo-plan-os')
           if (osEp) {
             await Promise.allSettled(
-              planOptionsUpdate.map(async (p: OptionItem) => {
+              planOptionsList.map(async (p: OptionItem) => {
                 const planIdKey = String(p.value)
                 try {
                   const resOs = await callEndpoint(osEp, sanitizedCredentials, { id: planIdKey })
