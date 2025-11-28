@@ -171,7 +171,14 @@ const normalizeOsGraphicValue = (value: string): OsGraphic | null => {
   }
 
   const withoutMarker = trimmed.startsWith('*/') ? trimmed.slice(2) : trimmed
-  const origin = getAssetOrigin()
+  const assetOrigin = 'https://app.alice.ws'
+  const origin = getAssetOrigin() ?? assetOrigin
+  const isAssetPath = withoutMarker.startsWith('/assets') || withoutMarker.includes('/assets/')
+
+  if (isAssetPath && assetOrigin) {
+    return { type: 'img', content: `${assetOrigin}${withoutMarker}` }
+  }
+
   if (origin) {
     try {
       const absolute = new URL(withoutMarker, `${origin}/`).toString()
@@ -243,6 +250,13 @@ const deriveOsOptions = (payload: unknown) => {
   // 先尝试扁平
   const flat = buildGenericOptions(payload, ['id','os_id','code','value'], ['name','label','title','description'])
   if (flat.length > 0) return flat
+
+  if (isRecord(payload) && Array.isArray((payload as any).data)) {
+    const dataArr = (payload as any).data
+    if (dataArr.length && isRecord(dataArr[0]) && 'os_list' in (dataArr[0] as any)) {
+      return flattenPlanOs({ os: dataArr } as any)
+    }
+  }
 
   // 尝试兼容 { os: groups[] }
   if (isRecord(payload) && Array.isArray((payload as any).os)) {
