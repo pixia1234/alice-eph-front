@@ -121,6 +121,15 @@ const coerceJsonValue = (value: string): string | number | boolean => {
   return value
 }
 
+const safeParseJson = (raw: string): any | null => {
+  try {
+    const cleaned = raw.startsWith('\ufeff') ? raw.slice(1) : raw
+    return JSON.parse(cleaned)
+  } catch {
+    return null
+  }
+}
+
 const buildGenericOptions = (payload: unknown, idKeys: string[], labelKeys: string[]): OptionItem[] => {
   const items = unwrapList(payload)
   const options: OptionItem[] = []
@@ -257,6 +266,12 @@ const deriveOsOptions = (payload: unknown) => {
       return flattenPlanOs({ os: dataArr } as any)
     }
   }
+  if (isRecord(payload) && isRecord((payload as any).data) && Array.isArray((payload as any).data.data)) {
+    const dataArr = (payload as any).data.data
+    if (dataArr.length && isRecord(dataArr[0]) && 'os_list' in (dataArr[0] as any)) {
+      return flattenPlanOs({ os: dataArr } as any)
+    }
+  }
 
   // 尝试兼容 { os: groups[] }
   if (isRecord(payload) && Array.isArray((payload as any).os)) {
@@ -306,6 +321,7 @@ function App() {
   const [prefetchState, setPrefetchState] = useState<'idle'|'loading'|'done'|'error'>('idle')
   const [catalogRefreshTick, bumpCatalogRefreshTick] = useState(0)
   const [osFetchStatus, setOsFetchStatus] = useState<Record<string, 'idle'|'loading'|'success'|'error'>>({})
+  const [osFetchError, setOsFetchError] = useState<Record<string, string>>({})
   const initialEndpoint = defaultEndpoint ?? endpoints[0]
   const [selectedEndpointId, setSelectedEndpointId] = useState(initialEndpoint?.id ?? '')
   const selectedEndpoint = useMemo(
@@ -341,6 +357,14 @@ function App() {
     const timeout = setTimeout(() => setTransformCopyStatus(null), 2000)
     return () => clearTimeout(timeout)
   }, [transformCopyStatus])
+
+  // 确保在有计划列表时自动填充 deploy 的 Plan ID，避免 OS 拉取卡在空值
+  useEffect(() => {
+    if (selectedEndpoint.id !== 'evo-deploy') return
+    if (!catalog.plans.length) return
+    if (formValues.product_id) return
+    setFormValues(prev => ({ ...prev, product_id: catalog.plans[0].value }))
+  }, [catalog.plans, formValues.product_id, selectedEndpoint.id])
 
   /** 切换端点时重置该端点的默认表单值 */
   const handleEndpointChange = (id: string) => {
@@ -424,6 +448,39 @@ function App() {
           }
         })
 
+        // 如果计划列表没有带 OS 详情，这里预取一次以免后续界面卡在等待状态
+        if (planOptionsUpdate && planOptionsUpdate.length > 0) {
+          const osEp = findEndpointById('evo-plan-os')
+          if (osEp) {
+            await Promise.allSettled(
+              planOptionsUpdate.map(async p => {
+                const planIdKey = String(p.value)
+                try {
+                  const resOs = await callEndpoint(osEp, sanitizedCredentials, { id: planIdKey })
+                  let osOpts = deriveOsOptions(resOs.data)
+                  if (!osOpts.length && typeof resOs.rawBody === 'string') {
+                    const parsed = safeParseJson(resOs.rawBody)
+                    if (parsed) {
+                      osOpts = deriveOsOptions(parsed)
+                    }
+                  }
+                  if (!osOpts.length && isRecord(resOs.data)) {
+                    const nested = (resOs.data as any).data
+                    if (nested) {
+                      osOpts = deriveOsOptions(nested)
+                    }
+                  }
+                  if (osOpts.length > 0) {
+                    planOsUpdates[planIdKey] = osOpts
+                  }
+                } catch {
+                  // 单个计划的 OS 预取失败不致命，后续按需再拉取
+                }
+              })
+            )
+          }
+        }
+
         if (cancelled) return
 
         setCatalog(prev => {
@@ -475,6 +532,11 @@ function App() {
       formValues['planID']
     if (directPlan) return String(directPlan)
 
+    // Deploy 场景下，如果还没填 Plan，则默认取计划列表的第一个，确保 OS 能拉取
+    if (selectedEndpoint.id === 'evo-deploy' && catalog.plans.length > 0) {
+      return String(catalog.plans[0].value)
+    }
+
     const raw = selectedInstanceOption?.raw
     if (raw && isRecord(raw)) {
       return (
@@ -486,7 +548,7 @@ function App() {
   }, [formValues, selectedInstanceOption])
 
   useEffect(() => {
-    if (!hasCredentials || !planIdForOs) return
+    if (!planIdForOs) return
     const cached = catalog.osByPlan[planIdForOs]
     if (cached && cached.length > 0) return  // 已经有缓存，直接用
     const status = osFetchStatus[planIdForOs]
@@ -501,18 +563,43 @@ function App() {
       try {
         const res = await callEndpoint(osEp, sanitizedCredentials, { id: planIdForOs })
         if (cancelled) return
-        const osOpts = deriveOsOptions(res.data)
+        let osOpts = deriveOsOptions(res.data)
+        if (!osOpts.length && typeof res.rawBody === 'string') {
+          const parsed = safeParseJson(res.rawBody)
+          if (parsed) {
+            osOpts = deriveOsOptions(parsed)
+          }
+        }
+        if (!osOpts.length && isRecord(res.data)) {
+          const nested = (res.data as any).data
+          if (nested) {
+            osOpts = deriveOsOptions(nested)
+          }
+        }
         setCatalog(prev => ({ ...prev, osByPlan: { ...prev.osByPlan, [planIdForOs]: osOpts } }))
-        setOsFetchStatus(prev => ({ ...prev, [planIdForOs]: 'success' }))
-      } catch {
+        const isEmpty = osOpts.length === 0
+        setOsFetchStatus(prev => ({ ...prev, [planIdForOs]: isEmpty ? 'error' : 'success' }))
+        setOsFetchError(prev => {
+          const next = { ...prev }
+          if (isEmpty) {
+            const rawSnippet = typeof res.rawBody === 'string' ? res.rawBody.slice(0, 200) : ''
+            next[planIdForOs] = `接口返回为空，响应片段: ${rawSnippet || '无'}`
+          } else {
+            delete next[planIdForOs]
+          }
+          return next
+        })
+      } catch (err: any) {
         if (!cancelled) {
+          const msg = err?.status ? `HTTP ${err.status}` : (err?.message ?? '请求失败')
           setOsFetchStatus(prev => ({ ...prev, [planIdForOs]: 'error' }))
+          setOsFetchError(prev => ({ ...prev, [planIdForOs]: msg }))
         }
       }
     })()
 
     return () => { cancelled = true }
-  }, [catalog.osByPlan, hasCredentials, osFetchStatus, planIdForOs, sanitizedCredentials, setCatalog])
+  }, [catalog.osByPlan, osFetchStatus, planIdForOs, sanitizedCredentials, setCatalog])
 
   /** 动态选项：仅保留最常用映射（Plan/Instance/SSH/OS） */
   const dynamicOptions = useMemo<Record<string, OptionItem[]>>(() => {
@@ -669,13 +756,14 @@ function App() {
                 setCatalog(defaultCatalog)
                 setPrefetchState('idle')
                 setOsFetchStatus({})
+                setOsFetchError({})
                 bumpCatalogRefreshTick(t => t + 1)
               }}
               disabled={!hasCredentials}
             >
               Refresh data
             </button>
-            <button className="ghost-button" onClick={() => { setCredentials(defaultCredentials); setCatalog(defaultCatalog); setPrefetchState('idle'); setOsFetchStatus({}) }}>
+            <button className="ghost-button" onClick={() => { setCredentials(defaultCredentials); setCatalog(defaultCatalog); setPrefetchState('idle'); setOsFetchStatus({}); setOsFetchError({}) }}>
               Clear
             </button>
           </div>
@@ -817,22 +905,27 @@ function App() {
                     )
 
                   const renderOsCards = () => {
+                    const osStatus = osFetchStatus[planIdForOs ?? '']
+                    const osError = osFetchError[planIdForOs ?? '']
                     if (!hasOptions) {
-                      const osStatus = osFetchStatus[planIdForOs ?? '']
-                      const errorHint = osStatus === 'error'
-                        ? 'OS 列表加载失败，请检查凭证或点击 Refresh data 后重试。'
-                        : null
-                      const emptyHint = selectedEndpoint.id === 'evo-deploy'
-                        ? '请选择 Plan 以加载可用的 OS 列表。'
-                        : selectedEndpoint.id === 'evo-rebuild'
-                          ? '请选择实例以加载可用的 OS 列表。'
-                          : '暂无可用的操作系统选项。'
+                      const emptyHint =
+                        osStatus === 'success'
+                          ? '接口返回为空，请确认该 Plan 支持的 OS。'
+                          : osStatus === 'error'
+                            ? `OS 列表加载失败（${osError || 'Unknown error'}），请检查凭证或点击 Refresh data 后重试。`
+                            : selectedEndpoint.id === 'evo-deploy'
+                              ? '请选择 Plan 以加载可用的 OS 列表。'
+                              : selectedEndpoint.id === 'evo-rebuild'
+                                ? '请选择实例以加载可用的 OS 列表。'
+                                : '暂无可用的操作系统选项。'
                       return (
                         <div className="option-card option-card--os option-card--disabled" aria-disabled="true">
                           <span className="option-card__icon option-card__icon--placeholder" aria-hidden="true">?</span>
                           <span className="option-card__content">
-                            <span className="option-card__label">等待操作系统列表</span>
-                            <span className="option-card__meta">{errorHint ?? emptyHint}</span>
+                            <span className="option-card__label">
+                              {osStatus === 'success' ? '未获取到可用 OS' : '等待操作系统列表'}
+                            </span>
+                            <span className="option-card__meta">{emptyHint}</span>
                           </span>
                         </div>
                       )

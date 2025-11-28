@@ -102,6 +102,7 @@ async function callDirect(
     method: endpoint.method,
     headers: {
       Authorization: buildAuthorization(credentials),
+      Accept: 'application/json',
     },
   }
 
