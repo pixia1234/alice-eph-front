@@ -287,12 +287,23 @@ const deriveOsOptions = (payload: unknown) => {
 const findEndpointById = (id: string) => endpoints.find(e => e.id === id)
 
 /** 把 plan.os 扁平化成 OptionItem[]，并把 group/logo 合并到 raw */
+const sortOsOptions = (options: OptionItem[]): OptionItem[] => {
+  return [...options].sort((a, b) => {
+    const ga = Number((a.raw as any)?.group_id ?? (a.raw as any)?.groupId ?? (a.raw as any)?.__groupOrder ?? Number.MAX_SAFE_INTEGER)
+    const gb = Number((b.raw as any)?.group_id ?? (b.raw as any)?.groupId ?? (b.raw as any)?.__groupOrder ?? Number.MAX_SAFE_INTEGER)
+    if (ga !== gb) return ga - gb
+    return 0
+  })
+}
+
 const flattenPlanOs = (planRaw: Record<string, unknown>): OptionItem[] => {
   const groups = Array.isArray((planRaw as any)?.os) ? (planRaw as any).os : []
   const out: OptionItem[] = []
-  for (const g of groups) {
+  groups.forEach((g: any, idx: number) => {
     const groupName = readString(g?.group_name) ?? readString(g?.groupName) ?? ''
     const logo = readString(g?.logo) ?? ''
+    const groupIdRaw = readString((g as any)?.group_id) ?? readString((g as any)?.groupId) ?? ''
+    const groupOrder = Number.isFinite(Number(groupIdRaw)) ? Number(groupIdRaw) : Number.MAX_SAFE_INTEGER + idx
     const list = Array.isArray(g?.os_list) ? g.os_list : []
     for (const os of list) {
       const id = readString(os?.id) ?? ''
@@ -301,11 +312,11 @@ const flattenPlanOs = (planRaw: Record<string, unknown>): OptionItem[] => {
       out.push({
         value: id,
         label: name,
-        raw: { ...(os as any), group_name: groupName, logo }
+        raw: { ...(os as any), group_name: groupName, logo, group_id: groupIdRaw, __groupOrder: groupOrder }
       })
     }
-  }
-  return uniqueOptions(out)
+  })
+  return sortOsOptions(uniqueOptions(out))
 }
 
 /** -------------------- 组件 -------------------- */
@@ -472,7 +483,7 @@ function App() {
                     }
                   }
                   if (osOpts.length > 0) {
-                    planOsUpdates[planIdKey] = osOpts
+                    planOsUpdates[planIdKey] = sortOsOptions(osOpts)
                   }
                 } catch {
                   // 单个计划的 OS 预取失败不致命，后续按需再拉取
@@ -488,12 +499,15 @@ function App() {
           const next: CatalogData = { ...prev, osByPlan: { ...prev.osByPlan } }
           if (planOptionsUpdate && planOptionsUpdate.length > 0) {
             next.plans = planOptionsUpdate
-            for (const [planId, osOptions] of Object.entries(planOsUpdates)) {
-              const existing = next.osByPlan[planId]
-              if (!existing || existing.length === 0) {
-                next.osByPlan[planId] = osOptions
-              }
+          for (const [planId, osOptions] of Object.entries(planOsUpdates)) {
+            const existing = next.osByPlan[planId]
+            const normalized = sortOsOptions(osOptions)
+            if (!existing || existing.length === 0) {
+              next.osByPlan[planId] = normalized
+            } else {
+              next.osByPlan[planId] = sortOsOptions(existing)
             }
+          }
           }
           if (instancesUpdate && instancesUpdate.length > 0) {
             next.instances = instancesUpdate
@@ -577,7 +591,10 @@ function App() {
             osOpts = deriveOsOptions(nested)
           }
         }
-        setCatalog(prev => ({ ...prev, osByPlan: { ...prev.osByPlan, [planIdForOs]: osOpts } }))
+        setCatalog(prev => ({
+          ...prev,
+          osByPlan: { ...prev.osByPlan, [planIdForOs]: sortOsOptions(osOpts) }
+        }))
         const isEmpty = osOpts.length === 0
         setOsFetchStatus(prev => ({ ...prev, [planIdForOs]: isEmpty ? 'error' : 'success' }))
         setOsFetchError(prev => {
@@ -626,7 +643,7 @@ function App() {
         /\bos\b/.test(label) ||
         label.includes('os id')
       if (isOsField) {
-        map[f.key] = planIdForOs ? (catalog.osByPlan[planIdForOs] ?? []) : []
+        map[f.key] = planIdForOs ? sortOsOptions(catalog.osByPlan[planIdForOs] ?? []) : []
       }
     })
     return map
