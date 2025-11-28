@@ -280,6 +280,7 @@ function App() {
   const [catalog, setCatalog] = useLocalStorage<CatalogData>('alice.catalog', defaultCatalog)
   const [prefetchState, setPrefetchState] = useState<'idle'|'loading'|'done'|'error'>('idle')
   const [catalogRefreshTick, bumpCatalogRefreshTick] = useState(0)
+  const [osFetchStatus, setOsFetchStatus] = useState<Record<string, 'idle'|'loading'|'success'|'error'>>({})
   const initialEndpoint = defaultEndpoint ?? endpoints[0]
   const [selectedEndpointId, setSelectedEndpointId] = useState(initialEndpoint?.id ?? '')
   const selectedEndpoint = useMemo(
@@ -637,6 +638,7 @@ function App() {
               onClick={() => {
                 setCatalog(defaultCatalog)
                 setPrefetchState('idle')
+                setOsFetchStatus({})
                 bumpCatalogRefreshTick(t => t + 1)
               }}
               disabled={!hasCredentials}
