@@ -28,16 +28,16 @@ export default {
     }
 
     const upstreamHeaders = new Headers(headers)
-    let upstreamBody
-
-    if (method !== 'GET') {
-      const form = new FormData()
-      for (const [key, value] of Object.entries(body)) {
-        if (value !== undefined && value !== null) {
-          form.append(key, value)
-        }
+    if (!upstreamHeaders.has('Accept')) {
+      upstreamHeaders.set('Accept', 'application/json')
+    }
+    const hasBody = method !== 'GET' && body && Object.keys(body).length > 0
+    let upstreamBody = undefined
+    if (hasBody) {
+      if (!upstreamHeaders.has('Content-Type')) {
+        upstreamHeaders.set('Content-Type', 'application/json')
       }
-      upstreamBody = form
+      upstreamBody = JSON.stringify(body)
     }
 
     let upstreamResponse
@@ -76,7 +76,7 @@ function buildCorsResponse(response, env) {
 
   headers.set('Access-Control-Allow-Origin', allowOrigin)
   headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
   headers.append('Vary', 'Origin')
 
   return new Response(response.body, {
